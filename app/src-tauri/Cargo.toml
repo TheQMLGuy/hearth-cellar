@@ -1,0 +1,26 @@
+[package]
+name = "hearth-cellar"
+version = "2.2.0"
+description = "A curated YouTube viewing ritual"
+authors = ["Hearth & Cellar"]
+license = ""
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.11.3", features = [] }
+tauri-plugin-log = "2"
+ureq = { version = "2.10", default-features = false, features = ["tls", "json"] }
+regex = "1"
+rfd = { version = "0.15", default-features = false, features = ["common-controls-v6"] }

@@ -1,0 +1,35 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log
+package-lock.json.bak
+
+# Vite / renderer build
+dist/
+dist-electron/
+
+# Rust / Tauri build
+target/
+**/target/
+src-tauri/target/
+
+# Tauri-generated
+src-tauri/gen/schemas/
+
+# Local IDE state
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local env files
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+
+# Old Electron-era handoff bundle (kept locally but not in the public repo)
+project/
