@@ -855,6 +855,28 @@ input { font-family: inherit; }
   text-align: center;
   font-weight: 500;
 }
+.qty-input {
+  font-family: var(--mono);
+  font-size: 15px;
+  color: var(--ink);
+  width: 56px;
+  text-align: center;
+  font-weight: 500;
+  background: var(--card);
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  padding: 4px 6px;
+  -moz-appearance: textfield;
+}
+.qty-input::-webkit-outer-spin-button,
+.qty-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.qty-input:focus {
+  outline: none;
+  border-color: var(--ember);
+}
 .video-row {
   display: flex;
   align-items: center;

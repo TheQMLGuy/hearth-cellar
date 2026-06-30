@@ -24,7 +24,8 @@
         "transparent": false,
         "shadow": true,
         "center": true,
-        "backgroundColor": "#4a4338"
+        "backgroundColor": "#4a4338",
+        "dragDropEnabled": false
       }
     ],
     "security": {

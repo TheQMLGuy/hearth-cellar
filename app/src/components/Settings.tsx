@@ -927,8 +927,18 @@ export function Settings(props: Props) {
               <div className="qty">
                 <span className="qty-label">Minutes</span>
                 <button className="qty-btn" onClick={() => onUpdateFocus({ ...store.focusConfig, focusMinutes: Math.max(1, store.focusConfig.focusMinutes - 5) })}>−</button>
-                <span className="qty-val">{store.focusConfig.focusMinutes}</span>
-                <button className="qty-btn" onClick={() => onUpdateFocus({ ...store.focusConfig, focusMinutes: Math.min(120, store.focusConfig.focusMinutes + 5) })}>+</button>
+                <input
+                  type="number"
+                  className="qty-input"
+                  min={1}
+                  max={240}
+                  value={store.focusConfig.focusMinutes}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value, 10)
+                    if (Number.isFinite(n)) onUpdateFocus({ ...store.focusConfig, focusMinutes: Math.min(240, Math.max(1, n)) })
+                  }}
+                />
+                <button className="qty-btn" onClick={() => onUpdateFocus({ ...store.focusConfig, focusMinutes: Math.min(240, store.focusConfig.focusMinutes + 5) })}>+</button>
               </div>
             </div>
             <div className="cat-row">
@@ -936,8 +946,18 @@ export function Settings(props: Props) {
               <div className="qty">
                 <span className="qty-label">Minutes</span>
                 <button className="qty-btn" onClick={() => onUpdateFocus({ ...store.focusConfig, breakMinutes: Math.max(1, store.focusConfig.breakMinutes - 1) })}>−</button>
-                <span className="qty-val">{store.focusConfig.breakMinutes}</span>
-                <button className="qty-btn" onClick={() => onUpdateFocus({ ...store.focusConfig, breakMinutes: Math.min(30, store.focusConfig.breakMinutes + 1) })}>+</button>
+                <input
+                  type="number"
+                  className="qty-input"
+                  min={1}
+                  max={60}
+                  value={store.focusConfig.breakMinutes}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value, 10)
+                    if (Number.isFinite(n)) onUpdateFocus({ ...store.focusConfig, breakMinutes: Math.min(60, Math.max(1, n)) })
+                  }}
+                />
+                <button className="qty-btn" onClick={() => onUpdateFocus({ ...store.focusConfig, breakMinutes: Math.min(60, store.focusConfig.breakMinutes + 1) })}>+</button>
               </div>
             </div>
             <div className="cat-row">
@@ -945,8 +965,18 @@ export function Settings(props: Props) {
               <div className="qty">
                 <span className="qty-label">Sessions</span>
                 <button className="qty-btn" onClick={() => onUpdateFocus({ ...store.focusConfig, courseSessionLimit: Math.max(1, store.focusConfig.courseSessionLimit - 1) })}>−</button>
-                <span className="qty-val">{store.focusConfig.courseSessionLimit}</span>
-                <button className="qty-btn" onClick={() => onUpdateFocus({ ...store.focusConfig, courseSessionLimit: Math.min(10, store.focusConfig.courseSessionLimit + 1) })}>+</button>
+                <input
+                  type="number"
+                  className="qty-input"
+                  min={1}
+                  max={20}
+                  value={store.focusConfig.courseSessionLimit}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value, 10)
+                    if (Number.isFinite(n)) onUpdateFocus({ ...store.focusConfig, courseSessionLimit: Math.min(20, Math.max(1, n)) })
+                  }}
+                />
+                <button className="qty-btn" onClick={() => onUpdateFocus({ ...store.focusConfig, courseSessionLimit: Math.min(20, store.focusConfig.courseSessionLimit + 1) })}>+</button>
               </div>
             </div>
             <p className="page-lede" style={{ marginTop: 18, fontSize: 12.5 }}>
