@@ -3,7 +3,7 @@ import { autoMode } from './lib/rotation'
 import { DEFAULT_CATEGORIES } from './lib/categories'
 import { parseDurationLabel } from './lib/duration'
 
-const CURRENT_SCHEMA = 13
+const CURRENT_SCHEMA = 14
 
 const DEFAULT_QUOTAS: Record<CategoryId, number> = {
   curiosity: 2,
@@ -70,7 +70,6 @@ export async function loadStore(): Promise<PersistedStore> {
       partsConsumed: (it as { partsConsumed?: number }).partsConsumed ?? 0
     }))
     // Pull Shorts out of the loop into quarantine so the user can review/delete.
-    const loop = allLoop.filter((it) => !looksLikeShort(it))
     const existingQuarantine = (raw.shortsQuarantine ?? []) as LoopItem[]
     const shortsQuarantine = [
       ...existingQuarantine,
@@ -112,13 +111,31 @@ export async function loadStore(): Promise<PersistedStore> {
       ((raw as any).courseCategories && (raw as any).courseCategories.length > 0)
         ? (raw as any).courseCategories
         : DEFAULT_COURSE_CATEGORIES
+
+    // Migrated vault to wishlist
+    const rawVault: string[] = (raw as any).vault ?? []
+    const rawWishlist: LoopItem[] = (raw as any).wishlist ?? []
+    const wishlistVideoIds = new Set(rawWishlist.map(w => w.videoId))
+    const allPossibleItems = [...allLoop, ...(raw.done?.items ?? [])]
+    const itemsById = new Map(allPossibleItems.map(it => [it.id, it]))
+    const migratedWishlist = [...rawWishlist]
+    for (const id of rawVault) {
+      const item = itemsById.get(id)
+      if (item && !wishlistVideoIds.has(item.videoId)) {
+        wishlistVideoIds.add(item.videoId)
+        const wshId = item.id.startsWith('itm_') ? item.id.replace(/^itm_/, 'wsh_') : item.id.startsWith('wsh_') ? item.id : `wsh_${item.videoId}`
+        migratedWishlist.push({ ...item, id: wshId })
+      }
+    }
+    const vaultIdSet = new Set(rawVault)
+    const loop = allLoop.filter((it) => !looksLikeShort(it) && !vaultIdSet.has(it.id))
+
     const migrated: PersistedStore = {
       schemaVersion: CURRENT_SCHEMA,
       mode: raw.mode ?? autoMode(),
       loop,
       todayPlan: null,
       courses,
-      vault: raw.vault ?? [],
       categoryQuotas: raw.categoryQuotas ?? DEFAULT_QUOTAS,
       activeCourseId: raw.activeCourseId ?? null,
       watched: raw.watched ?? [],
@@ -146,7 +163,7 @@ export async function loadStore(): Promise<PersistedStore> {
       playlistNotes: raw.playlistNotes ?? {},
       courseCategories,
       activeCourseByCategory,
-      wishlist: raw.wishlist ?? []
+      wishlist: migratedWishlist
     }
     await window.hearth.setStore(migrated)
     return migrated
@@ -168,6 +185,28 @@ export async function loadStore(): Promise<PersistedStore> {
     s.activeCourseByCategory = acbc
   }
   if (!s.wishlist) s.wishlist = []
+  if ((s as any).vault) {
+    const rawVault: string[] = (s as any).vault ?? []
+    const wishlistVideoIds = new Set(s.wishlist.map((w) => w.videoId))
+    const byId = new Map<string, LoopItem>()
+    for (const it of s.loop) byId.set(it.id, it)
+    for (const it of s.done?.items ?? []) byId.set(it.id, it)
+    const migratedList: LoopItem[] = []
+    for (const id of rawVault) {
+      const item = byId.get(id)
+      if (!item) continue
+      if (wishlistVideoIds.has(item.videoId)) continue
+      wishlistVideoIds.add(item.videoId)
+      const wshId = item.id.startsWith('itm_') ? item.id.replace(/^itm_/, 'wsh_') : item.id.startsWith('wsh_') ? item.id : `wsh_${item.videoId}`
+      migratedList.push({ ...item, id: wshId })
+    }
+    if (migratedList.length > 0) {
+      s.wishlist = [...migratedList, ...s.wishlist]
+    }
+    const vaultIdSet = new Set(rawVault)
+    s.loop = s.loop.filter(it => !vaultIdSet.has(it.id))
+    delete (s as any).vault
+  }
   // One-time loop dedup. Earlier builds let concurrent channel refreshes
   // insert the same videoId twice; sweep them out on first load of the fix.
   // ALSO drop any loop entry whose videoId is already in this week's done

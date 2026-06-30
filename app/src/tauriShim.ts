@@ -22,7 +22,6 @@ const DEFAULT_STORE: PersistedStore = {
   loop: [],
   todayPlan: null,
   courses: [],
-  vault: [],
   categoryQuotas: { curiosity: 2, reflective: 2, craft: 1 } as Record<string, number>,
   activeCourseId: null,
   watched: [],
@@ -120,6 +119,14 @@ async function fetchVideoMeta(videoId: string): Promise<FetchedMeta | null> {
     return (await invoke('fetch_youtube_meta', { videoId, apiKey: cachedApiKey || null })) as FetchedMeta | null
   } catch {
     return null
+  }
+}
+
+async function fetchVideoTranscript(videoId: string): Promise<import('./types').TranscriptCue[]> {
+  try {
+    return ((await invoke('fetch_youtube_transcript', { videoId })) as import('./types').TranscriptCue[]) ?? []
+  } catch {
+    return []
   }
 }
 
@@ -265,6 +272,7 @@ export function installTauriShim(): void {
     getStore,
     setStore,
     fetchVideoMeta,
+    fetchVideoTranscript,
     fetchPlaylistMeta,
     fetchPlaylistVideos,
     resolveChannel,

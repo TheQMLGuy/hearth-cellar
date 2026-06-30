@@ -182,6 +182,7 @@ export interface DailySessions {
   date: string
   courseSessionsCompleted: number
   totalSessionsCompleted: number
+  courseSessionsByCategory?: Record<string, number>
 }
 
 export interface GoogleAuth {
@@ -205,7 +206,6 @@ export interface PersistedStore {
   loop: LoopItem[]
   todayPlan: DayPlan | null
   courses: Course[]
-  vault: string[]
   categoryQuotas: Record<CategoryId, number>
   activeCourseId: string | null
   watched: string[]
@@ -248,6 +248,11 @@ export interface PersistedStore {
   wishlist: LoopItem[]
 }
 
+export interface PlaylistNotePageMapping {
+  pageIdx: number
+  startSec: number
+}
+
 export interface PlaylistNote {
   courseId: string
   videoId: string
@@ -255,6 +260,7 @@ export interface PlaylistNote {
   courseTitle: string
   watchedAt: string | null
   note: RemarkableNoteRef
+  pageMappings?: PlaylistNotePageMapping[]
 }
 
 export interface FetchedMeta {
@@ -265,6 +271,11 @@ export interface FetchedMeta {
   durationSec?: number
   description?: string
   chapters?: Chapter[]
+}
+
+export interface TranscriptCue {
+  startSec: number
+  text: string
 }
 
 export interface ChannelLookup {
@@ -314,7 +325,7 @@ export type GooglePollResult =
   | { status: 'denied' }
   | { status: 'error'; message: string }
 
-export type Screen = 'today' | 'player' | 'courses' | 'courseFocus' | 'routine' | 'settings' | 'notes' | 'wishlist'
+export type Screen = 'today' | 'player' | 'courses' | 'courseFocus' | 'routine' | 'settings' | 'notes' | 'wishlist' | 'noteStudy'
 
 declare global {
   interface Window {
@@ -322,6 +333,7 @@ declare global {
       getStore: () => Promise<PersistedStore>
       setStore: (next: PersistedStore) => Promise<boolean>
       fetchVideoMeta: (videoId: string) => Promise<FetchedMeta | null>
+      fetchVideoTranscript: (videoId: string) => Promise<TranscriptCue[]>
       fetchPlaylistMeta: (playlistId: string) => Promise<FetchedMeta | null>
       fetchPlaylistVideos: (playlistId: string) => Promise<PlaylistVideo[]>
       resolveChannel: (handle: string) => Promise<ChannelLookup | null>

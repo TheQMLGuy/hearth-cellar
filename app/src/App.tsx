@@ -12,7 +12,8 @@ import type {
   Mode,
   PersistedStore,
   RoutineItem,
-  Screen
+  Screen,
+  PlaylistNotePageMapping
 } from './types'
 import { loadStore, saveStore, weekStartIso } from './storeClient'
 import {
@@ -40,6 +41,7 @@ import { Notes } from './components/Notes'
 import { Wishlist } from './components/Wishlist'
 import { AttachNoteModal } from './components/AttachNoteModal'
 import { BreakOverlay } from './components/BreakOverlay'
+import { NoteStudyView } from './components/NoteStudyView'
 
 function formatDateLabel(d: Date = new Date()): string {
   return d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
@@ -52,7 +54,6 @@ function recomputePlan(
   return computeDayPlan({
     loop: s.loop,
     mode: s.mode,
-    vault: s.vault,
     channelFresh: s.channelFresh,
     channelBucketByChannelId,
     date: todayKey(),
@@ -82,7 +83,7 @@ export function App() {
       if (!s.dailySessions || s.dailySessions.date !== today) {
         s = {
           ...s,
-          dailySessions: { date: today, courseSessionsCompleted: 0, totalSessionsCompleted: 0 }
+          dailySessions: { date: today, courseSessionsCompleted: 0, totalSessionsCompleted: 0, courseSessionsByCategory: {} }
         }
         saveStore(s)
       }
@@ -297,23 +298,6 @@ export function App() {
     [store, persist]
   )
 
-  const handleToggleFavorite = useCallback(
-    (id: string) => {
-      if (!store) return
-      const has = store.vault.includes(id)
-      const vault = has ? store.vault.filter((v) => v !== id) : [id, ...store.vault]
-      persist({ ...store, vault })
-    },
-    [store, persist]
-  )
-
-  const handleRemoveFromVault = useCallback(
-    (id: string) => {
-      if (!store) return
-      persist({ ...store, vault: store.vault.filter((v) => v !== id) })
-    },
-    [store, persist]
-  )
 
   const handleUpdateQuota = useCallback(
     (cat: CategoryId, value: number) => {
@@ -358,9 +342,9 @@ export function App() {
     (id: string) => {
       if (!store) return
       const loop = store.loop.filter((it) => it.id !== id)
-      const vault = store.vault.filter((v) => v !== id)
+      const wishlist = store.wishlist.filter((it) => it.id !== id)
       const watched = store.watched.filter((v) => v !== id)
-      const updated: PersistedStore = { ...store, loop, vault, watched }
+      const updated: PersistedStore = { ...store, loop, wishlist, watched }
       persist({
         ...updated,
         todayPlan: recomputePlan(updated, channelBucketByChannelId)
@@ -693,6 +677,34 @@ export function App() {
       persist({ ...store, wishlist })
     },
     [store, persist]
+  )
+
+  const handleToggleFavorite = useCallback(
+    (id: string) => {
+      if (!store) return
+      const inWishlist = store.wishlist.find((w) => w.id === id || w.videoId === id)
+      if (inWishlist) {
+        handlePromoteWishlistToLoop(inWishlist.id)
+      } else {
+        const inLoop = store.loop.find((l) => l.id === id || l.videoId === id)
+        if (inLoop) {
+          const wishId = inLoop.id.startsWith('itm_') ? inLoop.id.replace(/^itm_/, 'wsh_') : `wsh_${inLoop.id}`
+          const wishItem: LoopItem = { ...inLoop, id: wishId }
+          const wishlist = [wishItem, ...store.wishlist]
+          const loop = store.loop.filter((l) => l.id !== inLoop.id)
+          const interim: PersistedStore = { ...store, loop, wishlist }
+          persist({
+            ...interim,
+            todayPlan: recomputePlan(interim, channelBucketByChannelId)
+          })
+          if (activeItem && (activeItem.id === id || activeItem.videoId === id)) {
+            setActiveItem(null)
+            setScreen('today')
+          }
+        }
+      }
+    },
+    [store, persist, handlePromoteWishlistToLoop, activeItem, channelBucketByChannelId]
   )
 
   const handleRemoveRoutine = useCallback(
@@ -1220,6 +1232,78 @@ export function App() {
     [store, persist]
   )
 
+  const handleSaveNoteMappings = useCallback(
+    (noteKey: string, mappings: PlaylistNotePageMapping[], pdfPath?: string) => {
+      if (!store) return
+      setStore((prev) => {
+        if (!prev) return prev
+        const playlistNotes = { ...prev.playlistNotes }
+        if (playlistNotes[noteKey]) {
+          playlistNotes[noteKey] = {
+            ...playlistNotes[noteKey],
+            pageMappings: mappings
+          }
+          if (pdfPath) {
+            playlistNotes[noteKey].note = {
+              ...playlistNotes[noteKey].note,
+              source: 'local',
+              docUuid: pdfPath,
+              lastSyncedAt: new Date().toISOString()
+            }
+          }
+        } else {
+          const videoId = noteKey.replace(/^global:/, '')
+          const item = prev.loop.find((l) => l.videoId === videoId) || prev.done.items.find((d) => d.videoId === videoId)
+          if (item) {
+            playlistNotes[noteKey] = {
+              courseId: 'global',
+              videoId: item.videoId,
+              videoTitle: item.title,
+              courseTitle: 'General',
+              watchedAt: item.lastWatchedAt,
+              note: item.note || {
+                source: 'local',
+                docUuid: pdfPath || '',
+                label: 'Local Note',
+                lastUpdatedAt: new Date().toISOString(),
+                lastSyncedAt: new Date().toISOString()
+              },
+              pageMappings: mappings
+            }
+          }
+        }
+
+        let loop = prev.loop
+        let done = prev.done
+        if (noteKey.startsWith('global:')) {
+          const videoId = noteKey.replace(/^global:/, '')
+          loop = prev.loop.map((it) => {
+            if (it.videoId === videoId) {
+              const updatedNote = { ...it.note, source: 'local', docUuid: pdfPath || it.note?.docUuid || '' } as any
+              return { ...it, note: updatedNote }
+            }
+            return it
+          })
+          done = {
+            ...prev.done,
+            items: prev.done.items.map((it) => {
+              if (it.videoId === videoId) {
+                const updatedNote = { ...it.note, source: 'local', docUuid: pdfPath || it.note?.docUuid || '' } as any
+                return { ...it, note: updatedNote }
+              }
+              return it
+            })
+          }
+        }
+
+        const interim = { ...prev, playlistNotes, loop, done }
+        saveStore(interim)
+        return interim
+      })
+    },
+    [store]
+  )
+
   const handleMoveLater = useCallback(
     (id: string) => {
       if (!store) return
@@ -1264,7 +1348,6 @@ export function App() {
       loop: [],
       todayPlan: null,
       courses: [],
-      vault: [],
       categoryQuotas: store.categoryQuotas,
       activeCourseId: null,
       watched: [],
@@ -1272,7 +1355,7 @@ export function App() {
       channels: [],
       channelFresh: {},
       focusConfig: store.focusConfig,
-      dailySessions: { date: todayKey(), courseSessionsCompleted: 0, totalSessionsCompleted: 0 },
+      dailySessions: { date: todayKey(), courseSessionsCompleted: 0, totalSessionsCompleted: 0, courseSessionsByCategory: {} },
       routine: [],
       routineDoneByDay: {},
       googleAuth: store.googleAuth,
@@ -1400,7 +1483,7 @@ export function App() {
 
   // Handshake with iframes after they mount.
   useEffect(() => {
-    if (screen !== 'player' && screen !== 'courseFocus') {
+    if (screen !== 'player' && screen !== 'courseFocus' && screen !== 'noteStudy') {
       setVideoPlaying(false)
       return
     }
@@ -1415,7 +1498,7 @@ export function App() {
   // Poll currentTime every 5s while playing, and flush progress to disk every
   // 10s. Also flush on unmount (player close / video change).
   useEffect(() => {
-    if ((screen !== 'player' && screen !== 'courseFocus') || !videoPlaying) return
+    if ((screen !== 'player' && screen !== 'courseFocus' && screen !== 'noteStudy') || !videoPlaying) return
     const poll = window.setInterval(() => pollCurrentTimeFromIframes(), 5000)
     const flushAll = () => {
       for (const vid of Object.keys(progressByVideoRef.current)) flushProgress(vid)
@@ -1429,28 +1512,6 @@ export function App() {
   }, [screen, videoPlaying, flushProgress])
 
   // ============ Focus timer (only ticks while videoPlaying) ============
-  useEffect(() => {
-    const inFocusContext = (screen === 'player' || screen === 'courseFocus') && !onBreak
-    if (!inFocusContext || !store?.focusConfig.enabled) {
-      focusContextRef.current = null
-      return
-    }
-    focusContextRef.current = screen === 'courseFocus' ? 'course' : 'video'
-    if (!videoPlaying) return
-
-    const focusSec = (store?.focusConfig.focusMinutes ?? 40) * 60
-    const id = window.setInterval(() => {
-      setFocusElapsedSec((cur) => {
-        const next = cur + 1
-        if (next >= focusSec) {
-          triggerBreak(focusContextRef.current === 'course')
-          return 0
-        }
-        return next
-      })
-    }, 1000)
-    return () => window.clearInterval(id)
-  }, [videoPlaying, screen, onBreak, store?.focusConfig.enabled, store?.focusConfig.focusMinutes])
 
   // Reset elapsed only when the *context* genuinely changes to a different one.
   // Leaving CourseFocus and returning to the same course preserves the timer,
@@ -1481,24 +1542,56 @@ export function App() {
   }, [focusElapsedSec, store?.focusConfig.enabled, store?.focusConfig.focusMinutes, screen, videoPlaying])
 
   const triggerBreak = useCallback(
-    (isCourse: boolean) => {
+    (isCourse: boolean, categoryId?: string) => {
       if (!store) return
       postPauseToAllIframes()
       setBreakDurationSec(store.focusConfig.breakMinutes * 60)
       setOnBreak(true)
       const today = todayKey()
       const ds = store.dailySessions ?? { date: today, courseSessionsCompleted: 0, totalSessionsCompleted: 0 }
+      const categorySessions = { ...(ds.courseSessionsByCategory ?? {}) }
+      if (isCourse && categoryId) {
+        categorySessions[categoryId] = (categorySessions[categoryId] ?? 0) + 1
+      }
       persist({
         ...store,
         dailySessions: {
           date: today,
           totalSessionsCompleted: ds.totalSessionsCompleted + 1,
-          courseSessionsCompleted: ds.courseSessionsCompleted + (isCourse ? 1 : 0)
+          courseSessionsCompleted: ds.courseSessionsCompleted + (isCourse ? 1 : 0),
+          courseSessionsByCategory: categorySessions
         }
       })
     },
     [store, persist]
   )
+
+  useEffect(() => {
+    const inFocusContext = (screen === 'player' || screen === 'courseFocus') && !onBreak
+    if (!inFocusContext || !store?.focusConfig.enabled) {
+      focusContextRef.current = null
+      return
+    }
+    focusContextRef.current = screen === 'courseFocus' ? 'course' : 'video'
+    if (!videoPlaying) return
+
+    const focusSec = (store?.focusConfig.focusMinutes ?? 40) * 60
+    const activeCourseCat = activeCourseFocusId
+      ? store?.courses.find((c) => c.id === activeCourseFocusId)?.category || '__uncategorized__'
+      : undefined
+
+    const id = window.setInterval(() => {
+      setFocusElapsedSec((cur) => {
+        const next = cur + 1
+        if (next >= focusSec) {
+          triggerBreak(focusContextRef.current === 'course', activeCourseCat)
+          return 0
+        }
+        return next
+      })
+    }, 1000)
+    return () => window.clearInterval(id)
+  }, [videoPlaying, screen, onBreak, store?.focusConfig.enabled, store?.focusConfig.focusMinutes, activeCourseFocusId, store?.courses, triggerBreak])
 
   const endBreak = useCallback(() => {
     setOnBreak(false)
@@ -1515,18 +1608,6 @@ export function App() {
     return itemsForPlan(store.todayPlan, combined)
   }, [store])
 
-  const vaultItems = useMemo<LoopItem[]>(() => {
-    if (!store) return []
-    // Vault items may reference items that have since moved to the done bucket
-    // — combine both collections so vault entries don't vanish after watching.
-    const byId = new Map([...store.loop, ...store.done.items].map((i) => [i.id, i]))
-    const out: LoopItem[] = []
-    for (const id of store.vault) {
-      const it = byId.get(id)
-      if (it) out.push(it)
-    }
-    return out
-  }, [store])
 
   // Notes promotion rule: video appears in Notes view iff (a) it has a note
   // attached AND (b) has been watched-to-done at least once. Aggregates both
@@ -1571,15 +1652,27 @@ export function App() {
 
   const activeCourses = useMemo(() => {
     if (!store) return []
-    const result: { course: Course; categoryName: string; categoryColor: string }[] = []
+    const result: {
+      course: Course
+      categoryName: string
+      categoryColor: string
+      sessionsCompleted: number
+      sessionLimit: number
+      locked: boolean
+    }[] = []
     for (const [catId, courseId] of Object.entries(store.activeCourseByCategory)) {
       const course = store.courses.find((c) => c.id === courseId)
       if (!course) continue
       const cat = store.courseCategories.find((c) => c.id === catId)
+      const completed = store.dailySessions?.courseSessionsByCategory?.[catId] ?? 0
+      const limit = store.focusConfig.courseSessionLimit ?? 4
       result.push({
         course,
         categoryName: cat?.name ?? 'Uncategorized',
-        categoryColor: cat?.color ?? 'oklch(0.55 0.00 0)'
+        categoryColor: cat?.color ?? 'oklch(0.55 0.00 0)',
+        sessionsCompleted: completed,
+        sessionLimit: limit,
+        locked: completed >= limit
       })
     }
     return result
@@ -1605,7 +1698,10 @@ export function App() {
 
   const courseSessionsToday = store?.dailySessions?.courseSessionsCompleted ?? 0
   const courseSessionLimit = store?.focusConfig.courseSessionLimit ?? 4
-  const courseLocked = courseSessionsToday >= courseSessionLimit
+  const courseLocked = activeCourses.length > 0 && activeCourses.every((c) => c.locked)
+  const activeCourseCat = courseFocusCourse?.category || '__uncategorized__'
+  const categorySessionsToday = store?.dailySessions?.courseSessionsByCategory?.[activeCourseCat] ?? 0
+  const isCurrentCourseLocked = categorySessionsToday >= courseSessionLimit
 
   const routineDoneTodaySet = useMemo(() => {
     if (!store) return new Set<string>()
@@ -1744,7 +1840,7 @@ export function App() {
               <Player
                 key={activeItem.videoId}
                 item={activeItem}
-                isFavorited={store.vault.includes(activeItem.id)}
+                isFavorited={store.wishlist.some(w => w.videoId === activeItem.videoId)}
                 isWatched={store.watched.includes(activeItem.id)}
                 focusTimerLabel={focusTimerLabel}
                 startSec={startSec}
@@ -1833,7 +1929,7 @@ export function App() {
             )
           })()}
 
-          {screen === 'courseFocus' && courseFocusCourse && !courseLocked && (
+          {screen === 'courseFocus' && courseFocusCourse && !isCurrentCourseLocked && (
             <CourseFocus
               course={courseFocusCourse}
               watchedIds={courseWatchedSet}
@@ -1884,11 +1980,11 @@ export function App() {
             />
           )}
 
-          {screen === 'courseFocus' && courseLocked && (
+          {screen === 'courseFocus' && isCurrentCourseLocked && (
             <div className="screen">
               <div className="course-locked-full">
                 <div className="locked-eyebrow">Done for the day</div>
-                <h2>You're done with courses for today.</h2>
+                <h2>You're done with {courseFocusCourse?.category ? store?.courseCategories.find(c => c.id === courseFocusCourse.category)?.name : 'Uncategorized'} courses for today.</h2>
                 <p>Come back tomorrow for fresh focus.</p>
                 <button className="ingest-save" onClick={() => setScreen('today')}>Back to Today</button>
               </div>
@@ -1927,7 +2023,6 @@ export function App() {
           {screen === 'settings' && (
             <Settings
               store={store}
-              vaultItems={vaultItems}
               onUpdateQuota={handleUpdateQuota}
               onRecategorize={handleRecategorize}
               onSetItemBucket={handleSetItemBucket}
@@ -1940,11 +2035,6 @@ export function App() {
               onSetChannelCategory={handleSetChannelCategory}
               onRefreshChannels={handleRefreshChannels}
               onUpdateFocus={handleUpdateFocus}
-              onOpenVaultItem={(it) => {
-                setActiveItem(it)
-                setScreen('player')
-              }}
-              onRemoveFromVault={handleRemoveFromVault}
               onAddRoutine={handleAddRoutine}
               onRemoveRoutine={handleRemoveRoutine}
               onUpdateGoogleAuth={handleUpdateGoogleAuth}
@@ -1971,10 +2061,45 @@ export function App() {
               categories={store.categories}
               onOpen={(it) => {
                 setActiveItem(it)
-                setScreen('player')
+                setScreen('noteStudy')
               }}
               onDetach={handleDetachNote}
               onBack={() => setScreen('today')}
+            />
+          )}
+
+          {screen === 'noteStudy' && activeItem && (
+            <NoteStudyView
+              item={activeItem}
+              playlistNotes={store.playlistNotes}
+              onSaveMappings={handleSaveNoteMappings}
+              onDone={() => {
+                const vid = activeItem.videoId
+                setStore((prev) => {
+                  if (!prev) return prev
+                  const existing = prev.progress[vid]
+                  const updated: PersistedStore = {
+                    ...prev,
+                    progress: {
+                      ...prev.progress,
+                      [vid]: {
+                        currentSec: existing?.currentSec ?? 0,
+                        durationSec: existing?.durationSec ?? 0,
+                        lastWatchedAt: new Date().toISOString(),
+                        completed: true
+                      }
+                    }
+                  }
+                  saveStore(updated)
+                  return updated
+                })
+                setActiveItem(null)
+                setScreen('notes')
+              }}
+              onClose={() => {
+                setActiveItem(null)
+                setScreen('notes')
+              }}
             />
           )}
 

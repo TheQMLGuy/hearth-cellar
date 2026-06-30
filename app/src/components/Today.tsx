@@ -20,7 +20,14 @@ interface Props {
   routineDoneCount: number
   watched: Set<string>
   dateLabel: string
-  activeCourses: { course: Course; categoryName: string; categoryColor: string }[]
+  activeCourses: {
+    course: Course
+    categoryName: string
+    categoryColor: string
+    sessionsCompleted?: number
+    sessionLimit?: number
+    locked?: boolean
+  }[]
   courseLocked: boolean
   courseSessionsToday: number
   courseSessionLimit: number
@@ -373,31 +380,45 @@ export function Today({
       ) : (
         activeCourses.length > 0 && (
           <div className="active-courses-grid">
-            {activeCourses.map(({ course, categoryName, categoryColor }) => (
-              <div key={course.id} className="active-course-multi" onClick={() => onOpenCourse(course.id)}>
-                <div className="active-bar" style={{ background: categoryColor }} />
-                <div className="active-body">
-                  <div className="active-eyebrow-row">
-                    <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" style={{ color: categoryColor }}>
-                      <path d="M4 19.5A2.5 2.5 0 016.5 17H20" />
-                      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
-                    </svg>
-                    <span className="active-eyebrow">{categoryName}</span>
-                    <span className="active-creator">{course.creator}</span>
-                  </div>
-                  <h3 className="active-title">{course.title}</h3>
-                  <div className="session-row">
-                    <div className="session-bar">
-                      <div className="session-bar-fill" style={{ width: `${sessionPct}%` }} />
+            {activeCourses.map(({ course, categoryName, categoryColor, sessionsCompleted, sessionLimit, locked }) => {
+              const comp = sessionsCompleted !== undefined ? sessionsCompleted : courseSessionsToday
+              const lim = sessionLimit !== undefined ? sessionLimit : courseSessionLimit
+              const isLocked = locked !== undefined ? locked : courseLocked
+              const pct = lim > 0 ? Math.min(100, Math.round((comp / lim) * 100)) : 0
+              return (
+                <div
+                  key={course.id}
+                  className={`active-course-multi ${isLocked ? 'locked' : ''}`}
+                  onClick={() => {
+                    if (!isLocked) onOpenCourse(course.id)
+                  }}
+                  style={isLocked ? { opacity: 0.65, cursor: 'not-allowed' } : undefined}
+                >
+                  <div className="active-bar" style={{ background: categoryColor }} />
+                  <div className="active-body">
+                    <div className="active-eyebrow-row">
+                      <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" style={{ color: categoryColor }}>
+                        <path d="M4 19.5A2.5 2.5 0 016.5 17H20" />
+                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
+                      </svg>
+                      <span className="active-eyebrow">{categoryName}</span>
+                      {isLocked && <span className="title-tag" style={{ marginLeft: 6, background: 'var(--ember-tint)', color: 'var(--ember-ink)' }}>Locked</span>}
+                      <span className="active-creator">{course.creator}</span>
                     </div>
-                    <span className="session-text">
-                      {courseSessionsToday} of {courseSessionLimit} sessions today
-                    </span>
+                    <h3 className="active-title">{course.title}</h3>
+                    <div className="session-row">
+                      <div className="session-bar">
+                        <div className="session-bar-fill" style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className="session-text">
+                        {comp} of {lim} sessions today
+                      </span>
+                    </div>
                   </div>
+                  <div className="active-cta">{isLocked ? 'Done ✓' : 'Open →'}</div>
                 </div>
-                <div className="active-cta">Open →</div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )
       )}

@@ -2604,9 +2604,17 @@ input { font-family: inherit; }
   box-shadow: var(--shadow-lift);
 }
 .course-card.dragging {
+  /* Just opacity. Transforms on the source element during drag confuse
+   * Webview2 — the dragged element's bounding box changes mid-drag and the
+   * OS shows the red "no-drop" cursor everywhere. */
   opacity: 0.4;
-  transform: scale(0.97);
   cursor: grabbing;
+  transition: none !important;
+}
+.course-card.dragging:hover {
+  /* Cancel the hover-lift so a drag-over the source doesn't transform it. */
+  transform: none;
+  transition: none !important;
 }
 .course-card-accent {
   height: 4px;
@@ -2863,3 +2871,269 @@ input { font-family: inherit; }
   background: oklch(0.95 0.04 25);
   border-color: oklch(0.55 0.20 25);
 }
+
+/* ─── Note Study Split Screen ─── */
+.note-study-container {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+}
+
+.note-study-split {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  height: calc(100vh - 56px); /* subtract header height */
+  background: var(--paper);
+}
+
+.note-study-video-pane {
+  flex: 0 0 50%;
+  border-right: 1px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+  background: #000;
+  justify-content: center;
+}
+
+.note-study-video-info {
+  background: var(--card);
+  padding: 12px 18px;
+  border-top: 1px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+}
+
+.note-study-video-info .info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.note-study-video-info .time-badge {
+  font-family: var(--mono);
+  font-size: 13px;
+  background: var(--paper-deep);
+  color: var(--ink);
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--hairline-soft);
+}
+
+.note-study-video-info .sync-toggle-label {
+  font-size: 12px;
+  color: var(--ink-soft);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.note-study-notes-pane {
+  flex: 0 0 50%;
+  display: flex;
+  flex-direction: column;
+  background: var(--card-warm);
+  overflow-y: auto;
+}
+
+/* Link Config Mode */
+.note-study-config {
+  padding: 24px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.note-study-config h3 {
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 18px;
+  margin: 0;
+  color: var(--ink);
+}
+
+.note-study-config .lede-hint {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  margin: 0 0 6px 0;
+  line-height: 1.4;
+}
+
+.config-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: var(--card);
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius);
+}
+
+.config-file-row .label {
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--ink-faint);
+  text-transform: uppercase;
+}
+
+.file-path-badge {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ember-ink);
+  background: var(--ember-tint);
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--ember);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-path-badge.remark-cloud-badge {
+  color: var(--ink-soft);
+  background: var(--paper-deep);
+  border-color: var(--hairline);
+}
+
+.mappings-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius);
+  background: var(--card);
+  overflow: hidden;
+  margin-top: 6px;
+}
+
+.mappings-header {
+  display: grid;
+  grid-template-columns: 80px 140px 1fr;
+  padding: 8px 14px;
+  background: var(--paper-deep);
+  border-bottom: 1px solid var(--hairline-soft);
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+}
+
+.mapping-row {
+  display: grid;
+  grid-template-columns: 80px 140px 1fr;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+
+.mapping-row:last-child {
+  border-bottom: none;
+}
+
+.page-number-lbl {
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.time-input {
+  width: 90px;
+  text-align: center;
+}
+
+.mapping-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Study Viewer Mode */
+.note-study-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.viewer-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  background: var(--card);
+  border-bottom: 1px solid var(--hairline);
+  flex-shrink: 0;
+}
+
+.viewer-controls .page-indicator {
+  font-family: var(--serif);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.viewer-controls .nav-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.viewer-frame-container {
+  flex: 1;
+  background: #525659; /* Standard PDF reader background */
+  position: relative;
+  overflow: hidden;
+  height: 100%;
+}
+
+.note-pdf-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: #525659;
+}
+
+.remarkable-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 40px;
+  height: 100%;
+  background: var(--card-warm);
+}
+
+.remarkable-placeholder .placeholder-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+.remarkable-placeholder h4 {
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 18px;
+  margin: 0 0 10px 0;
+  color: var(--ink);
+}
+
+.remarkable-placeholder p {
+  font-size: 13px;
+  color: var(--ink-soft);
+  max-width: 320px;
+  margin: 0 0 16px 0;
+  line-height: 1.4;
+}
+
+.remarkable-placeholder .secondary-hint {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  margin-top: 14px;
+  border-top: 1px dashed var(--hairline);
+  padding-top: 14px;
+}
+

@@ -17,9 +17,8 @@ export function bucketMatches(itemBucket: Bucket, mode: Mode): boolean {
 }
 
 // Lower score = higher priority. Order: unwatched → oldest-watched → recently
-// watched → vault. Vault items always last (the user's explicit rule about Vault).
-export function priorityScore(item: LoopItem, vault: Set<string>, now: Date): number {
-  if (vault.has(item.id)) return Number.MAX_SAFE_INTEGER
+// watched.
+export function priorityScore(item: LoopItem, now: Date): number {
   if (!item.lastWatchedAt) return 0 // unwatched first
   const watched = Date.parse(item.lastWatchedAt)
   if (!isFinite(watched)) return 0
@@ -39,7 +38,6 @@ function categoryAllowedToday(categories: Category[] | undefined, catId: Categor
 export interface ComputeDayPlanOpts {
   loop: LoopItem[]
   mode: Mode
-  vault: string[]
   channelFresh: Record<string, ChannelFresh>
   channelBucketByChannelId: Record<string, Bucket>
   date?: string
@@ -63,13 +61,10 @@ function nextPartFor(item: LoopItem, sliceTargetSec: number): Part | null {
   return parts[consumed]
 }
 
-function sortByPriority(items: LoopItem[], vault: Set<string>, now: Date): LoopItem[] {
+function sortByPriority(items: LoopItem[], now: Date): LoopItem[] {
   return items.slice().sort((a, b) => {
-    const sa = priorityScore(a, vault, now)
-    const sb = priorityScore(b, vault, now)
-    if (sa === Number.MAX_SAFE_INTEGER && sb === Number.MAX_SAFE_INTEGER) return 0
-    if (sa === Number.MAX_SAFE_INTEGER) return 1
-    if (sb === Number.MAX_SAFE_INTEGER) return -1
+    const sa = priorityScore(a, now)
+    const sb = priorityScore(b, now)
     return sa - sb
   })
 }
@@ -78,7 +73,6 @@ export function computeDayPlan(opts: ComputeDayPlanOpts): DayPlan {
   const {
     loop,
     mode,
-    vault,
     channelFresh,
     channelBucketByChannelId,
     date = todayKey(),
@@ -88,7 +82,6 @@ export function computeDayPlan(opts: ComputeDayPlanOpts): DayPlan {
   } = opts
   const now = new Date()
   const dow = now.getDay()
-  const vaultSet = new Set(vault)
   // Eligible items: bucket must match today's mode, and the video must NOT
   // be a confirmed Short (duration > 0 AND <= 60). Items with unknown
   // duration (durationSec === 0, e.g. channel-auto-ingested videos that
@@ -115,7 +108,7 @@ export function computeDayPlan(opts: ComputeDayPlanOpts): DayPlan {
     // only — it's not enforced for picking.
     void sundayMinutes
     void MIN_PART_FLOOR
-    const sorted = sortByPriority(eligible, vaultSet, now)
+    const sorted = sortByPriority(eligible, now)
     for (const item of sorted) {
       const total = itemDurationSec(item)
       parts.push({
@@ -143,7 +136,7 @@ export function computeDayPlan(opts: ComputeDayPlanOpts): DayPlan {
     for (const cat of catList) {
       let budget = Math.max(60, (cat.minutesPerDay ?? FALLBACK_MINUTES_PER_DAY) * 60)
       const list = byCategory[cat.id] ?? []
-      const sorted = sortByPriority(list, vaultSet, now)
+      const sorted = sortByPriority(list, now)
       const cur: Part[] = []
       for (const item of sorted) {
         if (budget < MIN_PART_FLOOR) break

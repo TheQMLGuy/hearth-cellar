@@ -59,9 +59,10 @@ export function Courses({
   const [drafting, setDrafting] = useState(false)
   const [error, setError] = useState('')
   const [dragOverCol, setDragOverCol] = useState<string | null>(null)
-  const [draggingId, setDraggingId] = useState<string | null>(null)
   const [editState, setEditState] = useState<EditState | null>(null)
   const dragDataRef = useRef<string | null>(null)
+  const isDraggingRef = useRef(false)
+  const [selectedCatId, setSelectedCatId] = useState<string>(courseCategories[0]?.id || UNCATEGORIZED_ID)
 
   // Build columns: one per category + uncategorized
   const columns: { id: string; name: string; color: string; courses: Course[] }[] = [
@@ -99,6 +100,7 @@ export function Courses({
         title: meta?.title ?? 'Untitled course',
         creator: meta?.author ?? '',
         bucket: 'WKDY',
+        category: selectedCatId !== UNCATEGORIZED_ID ? selectedCatId : undefined,
         addedAt: new Date().toISOString()
       }
       onAdd(course)
@@ -107,13 +109,14 @@ export function Courses({
     }
     // Single video → auto-split
     const meta = await window.hearth.fetchVideoMeta(parsed.id)
-    setDrafting(false)
     if (!meta) {
+      setDrafting(false)
       setError("Couldn't read that video's metadata.")
       return
     }
     let total = meta.durationSec ?? 0
     if (total <= 0) {
+      setDrafting(false)
       const manual = prompt(
         `Couldn't auto-read the length of "${meta.title || parsed.id}".\n\nHow many minutes long is it? (whole number)`
       )
@@ -124,9 +127,22 @@ export function Courses({
         return
       }
       total = mins * 60
+      setDrafting(true)
     }
-    const TARGET_SEC = 45 * 60
+
+    // Try to fetch transcript for naming parts if chapters aren't available
     const chapters = meta.chapters ?? []
+    let transcriptCues: any[] = []
+    if (chapters.length < 3) {
+      try {
+        transcriptCues = await window.hearth.fetchVideoTranscript(parsed.id)
+      } catch (e) {
+        console.warn('Failed to fetch transcript:', e)
+      }
+    }
+    setDrafting(false)
+
+    const TARGET_SEC = 45 * 60
     let segments: { startSec: number; endSec: number; title: string }[] = []
     if (chapters.length >= 3) {
       let i = 0
@@ -149,10 +165,29 @@ export function Courses({
       for (let k = 0; k < n; k++) {
         const startSec = Math.round(k * span)
         const endSec = k === n - 1 ? total : Math.round((k + 1) * span)
-        segments.push({ startSec, endSec, title: `Part ${k + 1}` })
+        
+        let partTitle = `Part ${k + 1}`
+        if (transcriptCues.length > 0) {
+          const segmentCues = transcriptCues.filter(c => c.startSec >= startSec && c.startSec < endSec)
+          if (segmentCues.length > 0) {
+            const cueText = segmentCues.slice(0, 3).map(c => c.text).join(' ')
+              .replace(/<[^>]*>/g, '')
+              .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, '')
+              .replace(/\s+/g, ' ')
+              .trim()
+            const words = cueText.split(' ')
+            const phrase = words.length <= 6 ? cueText : words.slice(0, 6).join(' ') + '...'
+            if (phrase) {
+              partTitle = `Part ${k + 1}: ${phrase}`
+            }
+          }
+        }
+        segments.push({ startSec, endSec, title: partTitle })
       }
     }
-    const sourceLabel = chapters.length >= 3 ? 'YouTube chapters' : 'even 45-min slices'
+    const sourceLabel = chapters.length >= 3 
+      ? 'YouTube chapters' 
+      : (transcriptCues.length > 0 ? 'transcript-based titles' : 'even 45-min slices')
     const ok = confirm(
       `"${meta.title}" is ${Math.round(total / 60)} minutes long.\n\n` +
       `It will be split into ${segments.length} parts using ${sourceLabel} and added to Courses.\n\n` +
@@ -166,6 +201,7 @@ export function Courses({
       title: meta.title || 'Untitled course',
       creator: meta.author || '',
       bucket: 'WKDY',
+      category: selectedCatId !== UNCATEGORIZED_ID ? selectedCatId : undefined,
       addedAt: new Date().toISOString(),
       singleVideo: {
         videoId: parsed.id,
@@ -180,14 +216,23 @@ export function Courses({
   // ─── Drag handlers ────────────────────────────────
   function onDragStart(e: React.DragEvent, courseId: string) {
     dragDataRef.current = courseId
-    setDraggingId(courseId)
+    isDraggingRef.current = true
     e.dataTransfer.effectAllowed = 'move'
     e.dataTransfer.setData('text/plain', courseId)
+    const target = e.currentTarget as HTMLElement
+    // Delay class addition to allow browser to capture drag feedback image first
+    setTimeout(() => {
+      if (isDraggingRef.current) {
+        target.classList.add('dragging')
+      }
+    }, 0)
   }
-  function onDragEnd() {
-    setDraggingId(null)
+  function onDragEnd(e: React.DragEvent) {
+    isDraggingRef.current = false
     setDragOverCol(null)
     dragDataRef.current = null
+    const target = e.currentTarget as HTMLElement
+    target.classList.remove('dragging')
   }
   function onDragOver(e: React.DragEvent, colId: string) {
     e.preventDefault()
@@ -204,7 +249,6 @@ export function Courses({
   function onDrop(e: React.DragEvent, colId: string) {
     e.preventDefault()
     setDragOverCol(null)
-    setDraggingId(null)
     const courseId = dragDataRef.current ?? e.dataTransfer.getData('text/plain')
     if (!courseId) return
     const newCat = colId === UNCATEGORIZED_ID ? null : colId
@@ -251,10 +295,33 @@ export function Courses({
           className="ingest-input"
           onKeyDown={(e) => { if (e.key === 'Enter') handleAdd() }}
         />
+        <select
+          value={selectedCatId}
+          onChange={(e) => setSelectedCatId(e.target.value)}
+          className="ingest-input"
+          style={{
+            flex: '0 0 160px',
+            padding: '8px 12px',
+            fontSize: 13,
+            background: 'var(--card)',
+            color: 'var(--ink)',
+            border: '1px solid var(--hairline-soft)',
+            borderRadius: 8,
+            cursor: 'pointer',
+            height: '42px',
+            outline: 'none'
+          }}
+        >
+          {courseCategories.map((cat) => (
+            <option key={cat.id} value={cat.id}>{cat.name}</option>
+          ))}
+          <option value={UNCATEGORIZED_ID}>Uncategorized</option>
+        </select>
         <button
           className="ingest-save"
           disabled={drafting || draftUrl.trim().length === 0}
           onClick={handleAdd}
+          style={{ height: '42px' }}
         >
           {drafting ? 'Adding…' : '+ Add'}
         </button>
@@ -357,10 +424,12 @@ export function Courses({
                     col.courses.map((c) => (
                       <div
                         key={c.id}
-                        className={`course-card${draggingId === c.id ? ' dragging' : ''}`}
+                        className="course-card"
                         draggable
                         onDragStart={(e) => onDragStart(e, c.id)}
                         onDragEnd={onDragEnd}
+                        onDragOver={(e) => onDragOver(e, col.id)}
+                        onDrop={(e) => onDrop(e, col.id)}
                         onClick={() => onOpen(c.id)}
                       >
                         <div className="course-card-accent" style={{ background: col.color }} />

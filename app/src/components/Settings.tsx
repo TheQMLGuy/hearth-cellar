@@ -7,7 +7,6 @@ import { GoogleTab } from './GoogleTab'
 
 interface Props {
   store: PersistedStore
-  vaultItems: LoopItem[]
   onUpdateQuota: (cat: CategoryId, value: number) => void
   onRecategorize: (id: string, cat: CategoryId) => void
   onSetItemBucket: (id: string, bucket: Bucket) => void
@@ -20,8 +19,6 @@ interface Props {
   onSetChannelCategory: (id: string, cat: CategoryId) => void
   onRefreshChannels: () => void
   onUpdateFocus: (cfg: FocusConfig) => void
-  onOpenVaultItem: (it: LoopItem) => void
-  onRemoveFromVault: (id: string) => void
   onAddRoutine: (item: RoutineItem) => void
   onRemoveRoutine: (id: string) => void
   onUpdateGoogleAuth: (next: GoogleAuth) => void
@@ -41,7 +38,7 @@ interface Props {
   onBack: () => void
 }
 
-type Tab = 'categories' | 'videos' | 'channels' | 'routine' | 'google' | 'focus' | 'vault' | 'general' | 'done'
+type Tab = 'categories' | 'videos' | 'channels' | 'routine' | 'google' | 'focus' | 'general' | 'done'
 
 function BucketPicker({
   value,
@@ -115,7 +112,6 @@ function VideoRow({
 export function Settings(props: Props) {
   const {
     store,
-    vaultItems,
     onUpdateQuota,
     onRecategorize,
     onSetItemBucket,
@@ -128,8 +124,6 @@ export function Settings(props: Props) {
     onSetChannelCategory,
     onRefreshChannels,
     onUpdateFocus,
-    onOpenVaultItem,
-    onRemoveFromVault,
     onAddRoutine,
     onRemoveRoutine,
     onUpdateGoogleAuth,
@@ -299,7 +293,6 @@ export function Settings(props: Props) {
           <button className={tab === 'routine' ? 'active' : ''} onClick={() => setTab('routine')}>Routine</button>
           <button className={tab === 'channels' ? 'active' : ''} onClick={() => setTab('channels')}>Channels</button>
           <button className={tab === 'google' ? 'active' : ''} onClick={() => setTab('google')}>Google</button>
-          <button className={tab === 'vault' ? 'active' : ''} onClick={() => setTab('vault')}>Vault</button>
           <button className={tab === 'focus' ? 'active' : ''} onClick={() => setTab('focus')}>Focus</button>
           <button className={tab === 'general' ? 'active' : ''} onClick={() => setTab('general')}>General</button>
         </div>
@@ -699,141 +692,134 @@ export function Settings(props: Props) {
                   <h2>No channels yet</h2>
                   <p>Once you add a channel, the app polls its RSS feed and surfaces today's uploads on Today.</p>
                 </div>
-              ) : (
-                <div className="card-grid">
-                  {store.channels.map((ch) => {
-                    const channelCatMap = makeCategoryMap(store.categories.length > 0 ? store.categories : DEFAULT_CATEGORIES)
-                    const cat = channelCatMap[ch.category] ?? DEFAULT_CATEGORIES[0]
-                    const fresh = store.channelFresh[ch.channelId]
-                    const isSun = ch.bucket === 'SUN'
-                    return (
-                      <div key={ch.id} className="card" style={{ position: 'relative', cursor: 'default' }}>
-                        <button
-                          onClick={() => onRemoveChannel(ch.id)}
-                          title="Remove channel"
-                          aria-label="Remove channel"
-                          style={{
-                            position: 'absolute',
-                            top: 8,
-                            right: 8,
-                            background: 'transparent',
-                            border: '1px solid var(--hairline)',
-                            color: 'var(--ink-faint)',
-                            borderRadius: 4,
-                            width: 22,
-                            height: 22,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            cursor: 'pointer',
-                            opacity: 0.6
-                          }}
-                          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = '1' }}
-                          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = '0.6' }}
-                        >
-                          <svg width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                            <path d="M18 6L6 18M6 6l12 12" />
-                          </svg>
-                        </button>
-                        <div className="card-chip">
-                          <div className="pip" style={{ background: cat.color }} />
-                          <span className="label">{isSun ? 'Sunday' : cat.name}</span>
-                        </div>
-                        <h3 className="card-title">{ch.name}</h3>
-                        <div className="card-meta">
-                          {ch.handle && <span className="creator">@{ch.handle}</span>}
-                          <span className="url" title={ch.channelId}>{ch.channelId.slice(0, 18)}…</span>
-                        </div>
-                        {fresh && (
-                          <div
-                            style={{
-                              marginTop: 10,
-                              paddingTop: 10,
-                              borderTop: '1px solid var(--hairline)',
-                              fontSize: 12,
-                              color: 'var(--ink-faint)',
-                              fontStyle: 'italic',
-                              lineHeight: 1.4
-                            }}
-                          >
-                            Latest: {fresh.title}
-                            <div style={{ fontSize: 10.5, marginTop: 2, fontStyle: 'normal', fontFamily: 'var(--mono)' }}>
-                              {new Date(fresh.publishedAt).toLocaleDateString()}
-                            </div>
-                          </div>
-                        )}
+              ) : (() => {
+                const renderChannelCard = (ch: typeof store.channels[0]) => {
+                  const channelCatMap = makeCategoryMap(store.categories.length > 0 ? store.categories : DEFAULT_CATEGORIES)
+                  const cat = channelCatMap[ch.category] ?? DEFAULT_CATEGORIES[0]
+                  const fresh = store.channelFresh[ch.channelId]
+                  const isSun = ch.bucket === 'SUN'
+                  return (
+                    <div key={ch.id} className="card" style={{ position: 'relative', cursor: 'default' }}>
+                      <button
+                        onClick={() => onRemoveChannel(ch.id)}
+                        title="Remove channel"
+                        aria-label="Remove channel"
+                        style={{
+                          position: 'absolute',
+                          top: 8,
+                          right: 8,
+                          background: 'transparent',
+                          border: '1px solid var(--hairline)',
+                          color: 'var(--ink-faint)',
+                          borderRadius: 4,
+                          width: 22,
+                          height: 22,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                          opacity: 0.6
+                        }}
+                        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = '1' }}
+                        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = '0.6' }}
+                      >
+                        <svg width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                          <path d="M18 6L6 18M6 6l12 12" />
+                        </svg>
+                      </button>
+                      <div className="card-chip">
+                        <div className="pip" style={{ background: cat.color }} />
+                        <span className="label">{isSun ? 'Sunday' : cat.name}</span>
+                      </div>
+                      <h3 className="card-title">{ch.name}</h3>
+                      <div className="card-meta">
+                        {ch.handle && <span className="creator">@{ch.handle}</span>}
+                        <span className="url" title={ch.channelId}>{ch.channelId.slice(0, 18)}…</span>
+                      </div>
+                      {fresh && (
                         <div
                           style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 6,
-                            marginTop: 12,
-                            flexWrap: 'wrap'
+                            marginTop: 10,
+                            paddingTop: 10,
+                            borderTop: '1px solid var(--hairline)',
+                            fontSize: 12,
+                            color: 'var(--ink-faint)',
+                            fontStyle: 'italic',
+                            lineHeight: 1.4
                           }}
                         >
-                          <BucketPicker value={ch.bucket} onChange={(b) => onSetChannelBucket(ch.id, b)} />
-                          {!isSun && (
-                            <select
-                              className="cat-select"
-                              value={ch.category}
-                              onChange={(e) => onSetChannelCategory(ch.id, e.target.value as CategoryId)}
-                              title="Category (Weekday only)"
-                              style={{ fontSize: 11 }}
-                            >
-                              {store.categories.map((c) => (
-                                <option key={c.id} value={c.id}>{c.name}</option>
-                              ))}
-                            </select>
-                          )}
+                          Latest: {fresh.title}
+                          <div style={{ fontSize: 10.5, marginTop: 2, fontStyle: 'normal', fontFamily: 'var(--mono)' }}>
+                            {new Date(fresh.publishedAt).toLocaleDateString()}
+                          </div>
                         </div>
+                      )}
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          marginTop: 12,
+                          flexWrap: 'wrap'
+                        }}
+                      >
+                        <BucketPicker value={ch.bucket} onChange={(b) => onSetChannelBucket(ch.id, b)} />
+                        {!isSun && (
+                          <select
+                            className="cat-select"
+                            value={ch.category}
+                            onChange={(e) => onSetChannelCategory(ch.id, e.target.value as CategoryId)}
+                            title="Category (Weekday only)"
+                            style={{ fontSize: 11 }}
+                          >
+                            {store.categories.map((c) => (
+                              <option key={c.id} value={c.id}>{c.name}</option>
+                            ))}
+                          </select>
+                        )}
                       </div>
-                    )
-                  })}
-                </div>
-              )}
+                    </div>
+                  )
+                }
+
+                const wkdyChannels = store.channels.filter((c) => c.bucket === 'WKDY')
+                const sunChannels = store.channels.filter((c) => c.bucket === 'SUN')
+
+                return (
+                  <div style={{ display: 'flex', gap: 24, marginTop: 24, alignItems: 'flex-start' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <h3 style={{ fontFamily: 'var(--serif)', fontWeight: 500, fontSize: 16, borderBottom: '1px solid var(--hairline)', paddingBottom: 8, marginBottom: 16, color: 'var(--ink)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span>📅 Weekday Channels</span>
+                        <span style={{ fontSize: 12, opacity: 0.6, fontFamily: 'var(--mono)' }}>{wkdyChannels.length}</span>
+                      </h3>
+                      <div className="card-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
+                        {wkdyChannels.map(renderChannelCard)}
+                        {wkdyChannels.length === 0 && (
+                          <div style={{ fontStyle: 'italic', fontSize: 13, color: 'var(--ink-faint)', padding: '20px 0' }}>No weekday channels</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <h3 style={{ fontFamily: 'var(--serif)', fontWeight: 500, fontSize: 16, borderBottom: '1px solid var(--hairline)', paddingBottom: 8, marginBottom: 16, color: 'var(--ink)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span>☀️ Sunday Channels</span>
+                        <span style={{ fontSize: 12, opacity: 0.6, fontFamily: 'var(--mono)' }}>{sunChannels.length}</span>
+                      </h3>
+                      <div className="card-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
+                        {sunChannels.map(renderChannelCard)}
+                        {sunChannels.length === 0 && (
+                          <div style={{ fontStyle: 'italic', fontSize: 13, color: 'var(--ink-faint)', padding: '20px 0' }}>No Sunday channels</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })()}
             </div>
           </div>
         )}
 
-        {tab === 'vault' && (
-          <div className="settings-pane">
-            <p className="page-lede" style={{ margin: '0 0 12px' }}>
-              Videos you've saved for return-watching. Pressing the heart in the Player adds an item here.
-            </p>
-            {vaultItems.length === 0 ? (
-              <div className="empty" style={{ marginTop: 24 }}>
-                <h2>An empty shelf</h2>
-                <p>Watch something, then press the heart in the Player to keep it here.</p>
-              </div>
-            ) : (
-              vaultItems.map((item) => {
-                const vaultCatMap = makeCategoryMap(store.categories.length > 0 ? store.categories : DEFAULT_CATEGORIES)
-                const cat = vaultCatMap[item.category] ?? DEFAULT_CATEGORIES[0]
-                return (
-                  <div key={item.id} className="vault-row">
-                    <div className="vault-body" onClick={() => onOpenVaultItem(item)}>
-                      <div className="card-chip">
-                        <div className="pip" style={{ background: cat.color }} />
-                        <span className="label">{item.bucket === 'SUN' ? 'Sunday' : cat.name}</span>
-                      </div>
-                      <div className="vault-title">{item.title}</div>
-                      <div className="vault-meta">
-                        <span>{item.creator}</span>
-                        <span className="dot-sep">·</span>
-                        <span className="vault-url">{shortLabelForUrl(item.url)}</span>
-                      </div>
-                    </div>
-                    <button className="x-btn" onClick={() => onRemoveFromVault(item.id)} title="Remove from Vault">
-                      <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                        <path d="M18 6L6 18M6 6l12 12" />
-                      </svg>
-                    </button>
-                  </div>
-                )
-              })
-            )}
-          </div>
-        )}
+
 
         {tab === 'routine' && (
           <div className="settings-pane">
@@ -976,7 +962,7 @@ export function Settings(props: Props) {
             <div className="info-row"><span className="info-key">Courses</span><span className="info-val">{store.courses.length}</span></div>
             <div className="info-row"><span className="info-key">Channels</span><span className="info-val">{store.channels.length}</span></div>
             <div className="info-row"><span className="info-key">Routine</span><span className="info-val">{store.routine.length}</span></div>
-            <div className="info-row"><span className="info-key">In Vault</span><span className="info-val">{store.vault.length}</span></div>
+            <div className="info-row"><span className="info-key">Wishlist items</span><span className="info-val">{store.wishlist.length}</span></div>
             <div className="info-row"><span className="info-key">Sessions today</span><span className="info-val">{store.dailySessions?.totalSessionsCompleted ?? 0} (course: {store.dailySessions?.courseSessionsCompleted ?? 0})</span></div>
             <div className="info-row"><span className="info-key">Data file</span><span className="info-val mono">%APPDATA%\com.hearthcellar.app\config.json</span></div>
 

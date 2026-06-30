@@ -760,6 +760,81 @@ fn fetch_youtube_meta(video_id: String, api_key: Option<String>) -> Option<Fetch
     Some(meta)
 }
 
+#[derive(Debug, Serialize)]
+pub struct TranscriptCue {
+    #[serde(rename = "startSec")]
+    start_sec: f64,
+    text: String,
+}
+
+/// Fetch a YouTube video's transcript via the public timedtext API. Tries
+/// English manual captions first, falls back to ASR (auto-generated) captions.
+/// Returns an empty vec when no transcript is available — the caller should
+/// fall back to "Part N" titles.
+#[tauri::command]
+fn fetch_youtube_transcript(video_id: String) -> Vec<TranscriptCue> {
+    if !is_video_id(&video_id) {
+        return Vec::new();
+    }
+    let attempts = &[
+        format!("https://www.youtube.com/api/timedtext?lang=en&v={}", video_id),
+        format!("https://www.youtube.com/api/timedtext?lang=en&kind=asr&v={}", video_id),
+        format!("https://www.youtube.com/api/timedtext?lang=en-US&v={}", video_id),
+        format!("https://www.youtube.com/api/timedtext?lang=en-US&kind=asr&v={}", video_id),
+    ];
+    for url in attempts {
+        let resp = match ureq::get(url)
+            .set("User-Agent", ua())
+            .set("Accept-Language", "en-US,en;q=0.9")
+            .timeout(std::time::Duration::from_secs(6))
+            .call()
+        {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let body = match resp.into_string() {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let cues = parse_timedtext_xml(&body);
+        if !cues.is_empty() {
+            return cues;
+        }
+    }
+    Vec::new()
+}
+
+/// Parse a YouTube timedtext XML transcript. Cue lines look like:
+///   <text start="3.5" dur="2.0">Hello world</text>
+/// We only need start + inner text. Robust to whitespace and missing dur.
+fn parse_timedtext_xml(body: &str) -> Vec<TranscriptCue> {
+    let mut cues = Vec::new();
+    // Match each <text ...>...</text> with start attr and inner content.
+    let re = match Regex::new(r#"(?s)<text[^>]*\bstart="([0-9.]+)"[^>]*>(.*?)</text>"#) {
+        Ok(r) => r,
+        Err(_) => return cues,
+    };
+    for cap in re.captures_iter(body) {
+        let start: f64 = cap.get(1).and_then(|m| m.as_str().parse().ok()).unwrap_or(-1.0);
+        if start < 0.0 { continue; }
+        let raw_text = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+        // Unescape XML entities + the JSON-style \n that YouTube uses.
+        let text = raw_text
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&apos;", "'")
+            .replace("\n", " ")
+            .trim()
+            .to_string();
+        if text.is_empty() { continue; }
+        cues.push(TranscriptCue { start_sec: start, text });
+    }
+    cues
+}
+
 #[tauri::command]
 fn fetch_youtube_playlist_meta(playlist_id: String, api_key: Option<String>) -> Option<FetchedMeta> {
     if !is_playlist_id(&playlist_id) {
@@ -1407,6 +1482,7 @@ pub fn run() {
             read_store,
             write_store,
             fetch_youtube_meta,
+            fetch_youtube_transcript,
             fetch_youtube_playlist_meta,
             fetch_youtube_playlist_videos,
             resolve_channel,
