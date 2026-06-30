@@ -82,6 +82,52 @@ export function Player({
   const initialStart = useRef(startSec)
   const initialEnd = useRef(endSec)
 
+  // Auto-mark Done when the user crosses the partition's end boundary. The
+  // YouTube IFrame API's `end=` URL param fires `onStateChange(0)` reliably
+  // for natural video end, but for partitioned videos we need to detect it
+  // ourselves — YouTube treats `end=` as "stop playback", not "video ended".
+  // We watch postMessage timeUpdate events from THIS player's iframe and
+  // fire onDone() once when currentTime crosses endSec.
+  const autoDoneFiredRef = useRef(false)
+  useEffect(() => {
+    autoDoneFiredRef.current = false
+
+    function onMessage(e: MessageEvent) {
+      if (autoDoneFiredRef.current) return
+      if (!String(e.origin || '').includes('youtube')) return
+      // Only listen to messages from OUR iframe — otherwise a second player
+      // (e.g. CourseFocus) would fire our onDone.
+      const ours = document.querySelector<HTMLIFrameElement>(
+        `iframe[data-video-id="${item.videoId}"]`
+      )
+      if (!ours || ours.contentWindow !== e.source) return
+      try {
+        const data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data
+        if (!data || !data.info) return
+        const info = data.info as { currentTime?: number; playerState?: number }
+        // Natural full-video end — YouTube fires state 0 ('ended').
+        if (info.playerState === 0) {
+          autoDoneFiredRef.current = true
+          onDone()
+          return
+        }
+        // Partitioned end — fire ~1s before endSec to beat YouTube's own
+        // boundary stop, otherwise it pauses there silently and the user is
+        // left staring at a paused frame.
+        const cur = info.currentTime
+        if (endSec && typeof cur === 'number' && cur >= endSec - 1) {
+          autoDoneFiredRef.current = true
+          onDone()
+        }
+      } catch {
+        // ignore non-JSON
+      }
+    }
+
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [endSec, item.videoId, onDone])
+
   return (
     <div className="player">
       <div className="player-head">

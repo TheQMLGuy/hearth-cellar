@@ -819,6 +819,44 @@ export function App() {
     [store, persist]
   )
 
+  /**
+   * Reorder a course within (or into) a category.
+   *   - beforeId === null → push to end of the column
+   *   - beforeId === <id> → insert dragged course immediately before <id>
+   * The kanban columns derive their order from store.courses' global order,
+   * so we just splice the global array. If the drop crosses categories,
+   * we also flip the dragged course's `category`.
+   */
+  const handleReorderCourse = useCallback(
+    (draggedId: string, targetCategoryId: string | null, beforeId: string | null) => {
+      if (!store) return
+      const dragged = store.courses.find((c) => c.id === draggedId)
+      if (!dragged) return
+      const newCat = targetCategoryId ?? undefined
+      const without = store.courses.filter((c) => c.id !== draggedId)
+      const repositioned: Course = { ...dragged, category: newCat }
+      let next: Course[]
+      if (beforeId === null) {
+        next = [...without, repositioned]
+      } else {
+        const idx = without.findIndex((c) => c.id === beforeId)
+        if (idx < 0) {
+          next = [...without, repositioned]
+        } else {
+          next = [...without.slice(0, idx), repositioned, ...without.slice(idx)]
+        }
+      }
+      // Same orphan-cleanup as handleSetCourseCategory.
+      const newCatKey = targetCategoryId ?? '__uncategorized__'
+      const acbc: Record<string, string> = { ...store.activeCourseByCategory }
+      for (const [catId, cId] of Object.entries(acbc)) {
+        if (cId === draggedId && catId !== newCatKey) delete acbc[catId]
+      }
+      persist({ ...store, courses: next, activeCourseByCategory: acbc })
+    },
+    [store, persist]
+  )
+
   const handleAddCourseCategory = useCallback(
     (cat: CourseCategory) => {
       if (!store) return
@@ -1660,7 +1698,21 @@ export function App() {
       sessionLimit: number
       locked: boolean
     }[] = []
-    for (const [catId, courseId] of Object.entries(store.activeCourseByCategory)) {
+    const acbc = store.activeCourseByCategory
+    // Build the effective active-course map: explicit entries win, otherwise
+    // the first course in each category is the default-active.
+    const effective: Record<string, string> = { ...acbc }
+    for (const cat of store.courseCategories) {
+      if (effective[cat.id]) continue
+      const firstInCat = store.courses.find((c) => c.category === cat.id)
+      if (firstInCat) effective[cat.id] = firstInCat.id
+    }
+    // Also surface the uncategorized bucket if it has courses.
+    if (!effective['__uncategorized__']) {
+      const firstUncat = store.courses.find((c) => !c.category)
+      if (firstUncat) effective['__uncategorized__'] = firstUncat.id
+    }
+    for (const [catId, courseId] of Object.entries(effective)) {
       const course = store.courses.find((c) => c.id === courseId)
       if (!course) continue
       const cat = store.courseCategories.find((c) => c.id === catId)
@@ -2000,6 +2052,7 @@ export function App() {
               onRemove={handleRemoveCourse}
               onSetActive={handleSetActiveCourseForCategory}
               onSetCourseCategory={handleSetCourseCategory}
+              onReorderCourse={handleReorderCourse}
               onOpen={openCourse}
               onBack={() => setScreen('today')}
               onAddCategory={handleAddCourseCategory}

@@ -28,6 +28,9 @@ interface Props {
   onRemove: (id: string) => void
   onSetActive: (categoryId: string, courseId: string | null) => void
   onSetCourseCategory: (courseId: string, categoryId: string | null) => void
+  /** Reorder a course: drops onto a card insert before it; drops on the
+   * column body (beforeId=null) push to the end. Crosses categories too. */
+  onReorderCourse: (draggedId: string, targetCategoryId: string | null, beforeId: string | null) => void
   onOpen: (id: string) => void
   onBack: () => void
   onAddCategory: (cat: CourseCategory) => void
@@ -49,6 +52,7 @@ export function Courses({
   onRemove,
   onSetActive,
   onSetCourseCategory,
+  onReorderCourse,
   onOpen,
   onBack,
   onAddCategory,
@@ -246,13 +250,18 @@ export function Courses({
     if (related && colEl.contains(related)) return
     if (dragOverCol === colId) setDragOverCol(null)
   }
-  function onDrop(e: React.DragEvent, colId: string) {
+  function onDrop(e: React.DragEvent, colId: string, beforeId: string | null = null) {
     e.preventDefault()
+    e.stopPropagation()
     setDragOverCol(null)
     const courseId = dragDataRef.current ?? e.dataTransfer.getData('text/plain')
-    if (!courseId) return
+    if (!courseId || courseId === beforeId) return
     const newCat = colId === UNCATEGORIZED_ID ? null : colId
-    onSetCourseCategory(courseId, newCat)
+    // Single reorder call handles both "move to category" and "reorder within
+    // category" — beforeId for slot insertion, null for append-to-end. We keep
+    // onSetCourseCategory imported in case other call sites need it later.
+    void onSetCourseCategory
+    onReorderCourse(courseId, newCat, beforeId)
     dragDataRef.current = null
   }
 
@@ -390,7 +399,11 @@ export function Courses({
           {columns.map((col) => {
             // Don't render uncategorized column if it's empty
             if (col.id === UNCATEGORIZED_ID && col.courses.length === 0) return null
-            const activeId = activeCourseByCategory[col.id] ?? null
+            // First course in each column is the default active until the
+            // user explicitly picks one (or unsets it). This is a display
+            // fallback only — we don't write it to the store, so picking
+            // "unset" still actually unsets.
+            const activeId = activeCourseByCategory[col.id] ?? col.courses[0]?.id ?? null
             return (
               <div
                 key={col.id}
@@ -429,7 +442,12 @@ export function Courses({
                         onDragStart={(e) => onDragStart(e, c.id)}
                         onDragEnd={onDragEnd}
                         onDragOver={(e) => onDragOver(e, col.id)}
-                        onDrop={(e) => onDrop(e, col.id)}
+                        /* Drop on a specific card inserts the dragged card
+                         * BEFORE this one (within-column reorder). Drop on
+                         * the column body or empty state appends to the
+                         * end / changes category — that path is handled by
+                         * the parent .kanban-col-body's onDrop. */
+                        onDrop={(e) => onDrop(e, col.id, c.id)}
                         onClick={() => onOpen(c.id)}
                       >
                         <div className="course-card-accent" style={{ background: col.color }} />
