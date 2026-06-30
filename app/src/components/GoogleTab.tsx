@@ -322,8 +322,8 @@ export function GoogleTab({
                         ))}
                       </select>
                       <div className="bucket-pill small">
-                        <button className={sel.bucket === 'WKDY' ? 'active' : ''} onClick={() => updateSelect(sub.channelId, { bucket: 'WKDY' })}>WKDY</button>
-                        <button className={sel.bucket === 'SUN' ? 'active' : ''} onClick={() => updateSelect(sub.channelId, { bucket: 'SUN' })}>SUN</button>
+                        <button className={sel.bucket === 'WKDY' ? 'active' : ''} onClick={() => updateSelect(sub.channelId, { bucket: 'WKDY' })} title="Spark — main Today plan">SPARK</button>
+                        <button className={sel.bucket === 'SUN' ? 'active' : ''} onClick={() => updateSelect(sub.channelId, { bucket: 'SUN' })} title="Entertainment — daily 60m strip">ENT</button>
                       </div>
                     </>
                   )}

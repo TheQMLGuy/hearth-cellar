@@ -176,15 +176,41 @@ export function Today({
         </div>
       </div>
 
-      {entTiles.length > 0 && (
-        <>
-          <div className="today-section-head">
-            <h2>Entertainment</h2>
-            <span className="today-section-sub">
-              {entDone} / {entTiles.length} done · {formatMinutesLabel(entAllocatedSec)} / {entertainmentBudgetMin}m
-              {entConsumedSec > 0 ? ` · ${formatMinutesLabel(entConsumedSec)} watched` : ''}
-            </span>
+      <>
+        <div className="today-section-head">
+          <h2>Entertainment</h2>
+          <span className="today-section-sub">
+            {entTiles.length > 0
+              ? (
+                <>
+                  {entDone} / {entTiles.length} done · {formatMinutesLabel(entAllocatedSec)} / {entertainmentBudgetMin}m
+                  {entConsumedSec > 0 ? ` · ${formatMinutesLabel(entConsumedSec)} watched` : ''}
+                </>
+              )
+              : `${entertainmentBudgetMin}m/day · the eating-time strip`}
+          </span>
+        </div>
+        {entTiles.length === 0 ? (
+          <div
+            className="empty"
+            style={{ marginTop: 0, padding: '16px 24px', borderRadius: 12, background: 'var(--card)', border: '1px dashed var(--hairline)' }}
+          >
+            <p style={{ margin: 0, fontSize: 13, color: 'var(--ink-faint)' }}>
+              Nothing here yet. Press <kbd>Ctrl</kbd> <kbd>I</kbd> and pick the
+              {' '}<strong>Entertainment</strong> target to add short videos for
+              eating-time. They show up here daily, capped at {entertainmentBudgetMin}m.
+              {' '}
+              <button
+                onClick={onTriggerIngest}
+                style={{
+                  background: 'transparent', border: 'none', padding: 0,
+                  color: 'var(--ember)', cursor: 'pointer', textDecoration: 'underline',
+                  fontSize: 13, fontFamily: 'inherit'
+                }}
+              >Ingest one now →</button>
+            </p>
           </div>
+        ) : (
           <div className="card-grid">
             {entTiles.map((entry, idx) => {
               const item = entry.item
@@ -239,8 +265,8 @@ export function Today({
               )
             })}
           </div>
-        </>
-      )}
+        )}
+      </>
 
       {routineCount > 0 && (
         <div className="routine-summary" onClick={onOpenRoutine}>

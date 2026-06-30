@@ -49,7 +49,7 @@ function BucketPicker({
 }) {
   return (
     <div className="bucket-pill small">
-      <button className={value === 'WKDY' ? 'active' : ''} onClick={() => onChange('WKDY')}>WKDY</button>
+      <button className={value === 'WKDY' ? 'active' : ''} onClick={() => onChange('WKDY')} title="Spark — category-budgeted main plan on Today">SPARK</button>
       <button className={value === 'SUN' ? 'active' : ''} onClick={() => onChange('SUN')} title="Entertainment — the daily 60m strip on Today">ENT</button>
     </div>
   )
@@ -93,7 +93,7 @@ function VideoRow({
           className="cat-select"
           value={item.category}
           onChange={(e) => onRecategorize(item.id, e.target.value as CategoryId)}
-          title="Category (Weekday only)"
+          title="Category (Spark only)"
         >
           {categories.map((c) => (
             <option key={c.id} value={c.id}>{c.name}</option>
@@ -300,7 +300,7 @@ export function Settings(props: Props) {
         {tab === 'categories' && (
           <div className="settings-pane">
             <p className="page-lede" style={{ margin: '0 0 6px' }}>
-              Your Weekday content is sorted into categories. Each gets an independent daily quota and a color.
+              Your Spark content is sorted into categories. Each gets an independent daily quota and a color.
             </p>
             <div className="quota-total">Daily total: <strong>{total}</strong> items</div>
 
@@ -620,11 +620,11 @@ export function Settings(props: Props) {
 
             <div className="bucket-section">
               <div className="bucket-section-head">
-                <h3>Weekday</h3>
+                <h3>Spark</h3>
                 <span className="bucket-section-count">{weekdayVideos.length}</span>
               </div>
               {weekdayVideos.length === 0 ? (
-                <div className="bucket-section-empty">No weekday videos yet.</div>
+                <div className="bucket-section-empty">No Spark videos yet.</div>
               ) : (
                 weekdayVideos.map((item) => (
                   <VideoRow
@@ -680,7 +680,7 @@ export function Settings(props: Props) {
                   className="cat-select"
                   value={channelCategory}
                   onChange={(e) => setChannelCategory(e.target.value as CategoryId)}
-                  title="Category (Weekday only)"
+                  title="Category (Spark only)"
                 >
                   {store.categories.map((c) => (
                     <option key={c.id} value={c.id}>{c.name}</option>
@@ -783,7 +783,7 @@ export function Settings(props: Props) {
                             className="cat-select"
                             value={ch.category}
                             onChange={(e) => onSetChannelCategory(ch.id, e.target.value as CategoryId)}
-                            title="Category (Weekday only)"
+                            title="Category (Spark only)"
                             style={{ fontSize: 11 }}
                           >
                             {store.categories.map((c) => (
@@ -803,13 +803,13 @@ export function Settings(props: Props) {
                   <div style={{ display: 'flex', gap: 24, marginTop: 24, alignItems: 'flex-start' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <h3 style={{ fontFamily: 'var(--serif)', fontWeight: 500, fontSize: 16, borderBottom: '1px solid var(--hairline)', paddingBottom: 8, marginBottom: 16, color: 'var(--ink)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span>📅 Weekday Channels</span>
+                        <span>⚡ Spark Channels</span>
                         <span style={{ fontSize: 12, opacity: 0.6, fontFamily: 'var(--mono)' }}>{wkdyChannels.length}</span>
                       </h3>
                       <div className="card-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
                         {wkdyChannels.map(renderChannelCard)}
                         {wkdyChannels.length === 0 && (
-                          <div style={{ fontStyle: 'italic', fontSize: 13, color: 'var(--ink-faint)', padding: '20px 0' }}>No weekday channels</div>
+                          <div style={{ fontStyle: 'italic', fontSize: 13, color: 'var(--ink-faint)', padding: '20px 0' }}>No Spark channels</div>
                         )}
                       </div>
                     </div>

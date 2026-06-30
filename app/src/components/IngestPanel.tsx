@@ -224,7 +224,7 @@ export function IngestPanel({
                   <>
                     <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-faint)', marginLeft: 8 }}>FOR</span>
                     <div className="bucket-pill">
-                      <button className={bucket === 'WKDY' ? 'active' : ''} onClick={() => setBucket('WKDY')}>Daily plan</button>
+                      <button className={bucket === 'WKDY' ? 'active' : ''} onClick={() => setBucket('WKDY')} title="Category-budgeted Spark plan on Today">Spark</button>
                       <button className={bucket === 'SUN' ? 'active' : ''} onClick={() => setBucket('SUN')} title="Daily Entertainment strip (60m cap)">Entertainment</button>
                     </div>
                   </>
@@ -236,7 +236,7 @@ export function IngestPanel({
               <div className="ingest-row" style={{ gap: 12, alignItems: 'center' }}>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-faint)' }}>FOR</span>
                 <div className="bucket-pill">
-                  <button className={bucket === 'WKDY' ? 'active' : ''} onClick={() => setBucket('WKDY')}>Daily plan</button>
+                  <button className={bucket === 'WKDY' ? 'active' : ''} onClick={() => setBucket('WKDY')} title="Category-budgeted Spark plan on Today">Spark</button>
                   <button className={bucket === 'SUN' ? 'active' : ''} onClick={() => setBucket('SUN')} title="Daily Entertainment strip (60m cap)">Entertainment</button>
                 </div>
               </div>

@@ -471,7 +471,7 @@ export function Courses({
                           <div className="course-card-title">{c.title}</div>
                           {c.creator && <div className="course-card-creator">{c.creator}</div>}
                           <div className="course-card-footer">
-                            <span className="course-card-bucket">{c.bucket === 'WKDY' ? 'Wkdy' : 'Sun'}</span>
+                            <span className="course-card-bucket">{c.bucket === 'WKDY' ? 'Spark' : 'Ent'}</span>
                             {activeId === c.id && (
                               <span className="course-card-active">Active</span>
                             )}

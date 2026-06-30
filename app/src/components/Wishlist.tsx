@@ -106,8 +106,8 @@ export function Wishlist({
                       <button
                         className={item.bucket === 'WKDY' ? 'active' : ''}
                         onClick={() => onSetBucket(item.id, 'WKDY')}
-                        title="Daily plan (category-budgeted)"
-                      >Daily</button>
+                        title="Spark — category-budgeted main plan on Today"
+                      >Spark</button>
                       <button
                         className={item.bucket === 'SUN' ? 'active' : ''}
                         onClick={() => onSetBucket(item.id, 'SUN')}
