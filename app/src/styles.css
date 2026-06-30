@@ -2618,6 +2618,11 @@ input { font-family: inherit; }
   border-radius: 12px;
   overflow: hidden;
   cursor: grab;
+  /* The column body is a flex container with overflow-y:auto. Without
+   * flex-shrink:0 the cards shrink to fit the column height (titles get
+   * clipped, footer disappears) before the scrollbar appears. Lock the
+   * card to its natural height so the COLUMN scrolls instead. */
+  flex-shrink: 0;
   transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease), opacity 0.2s;
   animation: fadeUp 0.3s var(--ease);
 }
