@@ -18,7 +18,9 @@ const DEFAULT_MINUTES_PER_CATEGORY: Record<CategoryId, number> = {
 }
 
 const DEFAULT_SLICE_TARGET_MIN = 30
-const DEFAULT_SUNDAY_MINUTES = 90
+// "sundayMinutes" is the legacy field name — it now powers the daily
+// Entertainment strip's minute cap, not a Sunday-only budget.
+const DEFAULT_SUNDAY_MINUTES = 60
 
 /** Heuristic: ≤60s OR `/shorts/` in the URL = Short. */
 function looksLikeShort(item: LoopItem): boolean {

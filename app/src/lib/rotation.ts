@@ -8,8 +8,11 @@ export function todayKey(d: Date = new Date()): string {
   return `${y}-${m}-${day}`
 }
 
-export function autoMode(d: Date = new Date()): Mode {
-  return d.getDay() === 0 ? 'SUN' : 'WKDY'
+export function autoMode(_d: Date = new Date()): Mode {
+  // Sunday-mode was killed. SUN-bucket items are now the daily "Entertainment"
+  // strip rendered on Today, capped to ~60 min/day. Every day uses WKDY mode
+  // for the main plan; entertainment is a sibling, not a Sunday-only thing.
+  return 'WKDY'
 }
 
 export function bucketMatches(itemBucket: Bucket, mode: Mode): boolean {
@@ -210,4 +213,57 @@ export function itemsForPlan(plan: DayPlan, loop: LoopItem[]): LoopItem[] {
     if (it) out.push(it)
   }
   return out
+}
+
+/**
+ * Pick today's Entertainment items from the loop's SUN-bucket pool — the
+ * stuff you watch while eating, capped at a daily minute budget (default
+ * 60 min). One item per row, no partitioning: each video plays start-to-end
+ * within its time slot (or skip).
+ *
+ *   - Items longer than the daily cap are excluded (they could never fit).
+ *   - Greedy fit by priority (unwatched → oldest-watched first).
+ *   - Shorts (≤60s) are still filtered out (same as the main plan).
+ */
+export interface ComputeEntertainmentOpts {
+  loop: LoopItem[]
+  entertainmentMinutes?: number
+}
+
+export function computeEntertainmentPlan(opts: ComputeEntertainmentOpts): {
+  parts: Part[]
+  itemIds: string[]
+} {
+  const { loop, entertainmentMinutes = 60 } = opts
+  const budgetSec = Math.max(60, entertainmentMinutes * 60)
+  const eligible = loop.filter((it) => {
+    if (it.bucket !== 'SUN') return false
+    const secs = itemDurationSec(it)
+    if (secs > 0 && secs <= 60) return false       // reject Shorts
+    if (secs > 0 && secs > budgetSec) return false // can't fit in a day
+    return true
+  })
+  const sorted = sortByPriority(eligible, new Date())
+  const parts: Part[] = []
+  const ids: string[] = []
+  let remaining = budgetSec
+  for (const item of sorted) {
+    const total = itemDurationSec(item)
+    // Unknown-duration items (channel auto-ingests without metadata) get
+    // a conservative ~30 min assumption so we don't pack the day with
+    // mystery videos. They still play start-to-end.
+    const len = total > 0 ? total : 30 * 60
+    if (len > remaining && parts.length > 0) continue
+    parts.push({
+      itemId: item.id,
+      partIdx: 0,
+      partCount: 1,
+      startSec: 0,
+      endSec: total // 0 means "play to natural end"
+    })
+    ids.push(item.id)
+    remaining -= len
+    if (remaining <= 60) break
+  }
+  return { parts, itemIds: ids }
 }

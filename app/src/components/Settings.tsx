@@ -50,7 +50,7 @@ function BucketPicker({
   return (
     <div className="bucket-pill small">
       <button className={value === 'WKDY' ? 'active' : ''} onClick={() => onChange('WKDY')}>WKDY</button>
-      <button className={value === 'SUN' ? 'active' : ''} onClick={() => onChange('SUN')}>SUN</button>
+      <button className={value === 'SUN' ? 'active' : ''} onClick={() => onChange('SUN')} title="Entertainment — the daily 60m strip on Today">ENT</button>
     </div>
   )
 }
@@ -430,15 +430,29 @@ export function Settings(props: Props) {
             </div>
 
             <div style={{ borderTop: '1px solid var(--hairline)', margin: '22px 0 0', paddingTop: 16 }}>
-              <p className="page-lede" style={{ margin: '0 0 6px' }}>Sunday is category-free — one flat minute budget for the day.</p>
+              <p className="page-lede" style={{ margin: '0 0 6px' }}>
+                Entertainment — short videos for eating-time, capped daily. Items added with the
+                "Entertainment" target during ingest land here and show up in the Entertainment
+                strip at the top of Today.
+              </p>
               <div className="cat-row">
-                <div className="cat-dot" style={{ background: 'var(--ink-faint)' }} />
-                <div className="cat-name">Sunday minutes</div>
+                <div className="cat-dot" style={{ background: 'oklch(0.70 0.13 60)' }} />
+                <div className="cat-name">Entertainment minutes</div>
                 <div className="qty">
                   <span className="qty-label">Min/day</span>
-                  <button className="qty-btn" onClick={() => onUpdateSundayMinutes(Math.max(15, (store.sundayMinutes ?? 90) - 15))}>−</button>
-                  <span className="qty-val">{store.sundayMinutes ?? 90}</span>
-                  <button className="qty-btn" onClick={() => onUpdateSundayMinutes(Math.min(360, (store.sundayMinutes ?? 90) + 15))}>+</button>
+                  <button className="qty-btn" onClick={() => onUpdateSundayMinutes(Math.max(15, (store.sundayMinutes ?? 60) - 15))}>−</button>
+                  <input
+                    type="number"
+                    className="qty-input"
+                    min={15}
+                    max={360}
+                    value={store.sundayMinutes ?? 60}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10)
+                      if (Number.isFinite(n)) onUpdateSundayMinutes(Math.min(360, Math.max(15, n)))
+                    }}
+                  />
+                  <button className="qty-btn" onClick={() => onUpdateSundayMinutes(Math.min(360, (store.sundayMinutes ?? 60) + 15))}>+</button>
                 </div>
               </div>
             </div>
@@ -575,7 +589,7 @@ export function Settings(props: Props) {
                     <div className="vault-body">
                       <div className="card-chip">
                         <div className="pip" style={{ background: cat.color }} />
-                        <span className="label">{item.bucket === 'SUN' ? 'Sunday' : cat.name}{when ? ` · ${when}` : ''}</span>
+                        <span className="label">{item.bucket === 'SUN' ? 'Entertainment' : cat.name}{when ? ` · ${when}` : ''}</span>
                       </div>
                       <div className="vault-title">{item.title}</div>
                       <div className="vault-meta">
@@ -627,11 +641,11 @@ export function Settings(props: Props) {
 
             <div className="bucket-section">
               <div className="bucket-section-head">
-                <h3>Sunday</h3>
+                <h3>Entertainment</h3>
                 <span className="bucket-section-count">{sundayVideos.length}</span>
               </div>
               {sundayVideos.length === 0 ? (
-                <div className="bucket-section-empty">No Sunday videos yet.</div>
+                <div className="bucket-section-empty">No Entertainment videos yet.</div>
               ) : (
                 sundayVideos.map((item) => (
                   <VideoRow
@@ -729,7 +743,7 @@ export function Settings(props: Props) {
                       </button>
                       <div className="card-chip">
                         <div className="pip" style={{ background: cat.color }} />
-                        <span className="label">{isSun ? 'Sunday' : cat.name}</span>
+                        <span className="label">{isSun ? 'Entertainment' : cat.name}</span>
                       </div>
                       <h3 className="card-title">{ch.name}</h3>
                       <div className="card-meta">
@@ -802,13 +816,13 @@ export function Settings(props: Props) {
 
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <h3 style={{ fontFamily: 'var(--serif)', fontWeight: 500, fontSize: 16, borderBottom: '1px solid var(--hairline)', paddingBottom: 8, marginBottom: 16, color: 'var(--ink)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span>☀️ Sunday Channels</span>
+                        <span>🍿 Entertainment Channels</span>
                         <span style={{ fontSize: 12, opacity: 0.6, fontFamily: 'var(--mono)' }}>{sunChannels.length}</span>
                       </h3>
                       <div className="card-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
                         {sunChannels.map(renderChannelCard)}
                         {sunChannels.length === 0 && (
-                          <div style={{ fontStyle: 'italic', fontSize: 13, color: 'var(--ink-faint)', padding: '20px 0' }}>No Sunday channels</div>
+                          <div style={{ fontStyle: 'italic', fontSize: 13, color: 'var(--ink-faint)', padding: '20px 0' }}>No entertainment channels</div>
                         )}
                       </div>
                     </div>

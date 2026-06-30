@@ -9,12 +9,18 @@ interface Props {
   items: LoopItem[]
   /** Parts in display order for today (may be empty for legacy plans). */
   parts: Part[]
+  /** Entertainment strip — SUN-bucket loop items, picked daily under a
+   * fixed minute budget (default 60m). Same LoopItem objects as items but
+   * scoped to the entertainment row. */
+  entertainmentItems: LoopItem[]
+  entertainmentParts: Part[]
+  entertainmentBudgetMin: number
   /** Per-video progress state. */
   progress: Record<string, VideoProgress>
   /** Sum of minutes-per-day budgets across enabled categories — for the header. */
   totalBudgetMin: number
-  /** Day mode — SUN suppresses category chips (Sunday is the catch-up day,
-   * not category-organized). */
+  /** Day mode — always WKDY now. Kept for back-compat with any caller that
+   * was still passing it. */
   mode: Mode
   routineCount: number
   routineDoneCount: number
@@ -58,6 +64,9 @@ interface MenuState {
 export function Today({
   items,
   parts,
+  entertainmentItems,
+  entertainmentParts,
+  entertainmentBudgetMin,
   progress,
   totalBudgetMin,
   routineCount,
@@ -80,9 +89,10 @@ export function Today({
   categories,
   mode
 }: Props) {
-  // Sunday is the harvest day — category labels just leak per-channel metadata
-  // that's irrelevant to the catch-up flow. Strip the chip text on SUN tiles.
-  const isSunday = mode === 'SUN'
+  // Sunday-mode is dead. Kept the param for back-compat; treat every day
+  // as a regular WKDY day. The previous SUN-only chip suppression is gone.
+  void mode
+  const isSunday = false
   const [menu, setMenu] = useState<MenuState | null>(null)
   const catMap = makeCategoryMap(categories.length > 0 ? categories : DEFAULT_CATEGORIES)
 
@@ -115,6 +125,22 @@ export function Today({
   }
   const consumedSec = tiles.reduce((acc, t) => (t.completed ? acc + tileSec(t) : acc), 0)
   const allocatedSec = tiles.reduce((acc, t) => acc + tileSec(t), 0)
+
+  // Build the entertainment strip tiles using the same shape.
+  const entTiles: TileEntry[] = (() => {
+    const byId = new Map(entertainmentItems.map((i) => [i.id, i]))
+    return entertainmentParts
+      .map<TileEntry | null>((p) => {
+        const item = byId.get(p.itemId)
+        if (!item) return null
+        const done = progress[item.videoId]?.completed === true || watched.has(item.id)
+        return { item, part: p, completed: done }
+      })
+      .filter((x): x is TileEntry => x !== null)
+  })()
+  const entAllocatedSec = entTiles.reduce((acc, t) => acc + tileSec(t), 0)
+  const entConsumedSec = entTiles.reduce((acc, t) => (t.completed ? acc + tileSec(t) : acc), 0)
+  const entDone = entTiles.filter((t) => t.completed).length
 
   const sessionPct = courseSessionLimit > 0
     ? Math.min(100, Math.round((courseSessionsToday / courseSessionLimit) * 100))
@@ -149,6 +175,72 @@ export function Today({
           <span>{dateLabel}</span>
         </div>
       </div>
+
+      {entTiles.length > 0 && (
+        <>
+          <div className="today-section-head">
+            <h2>Entertainment</h2>
+            <span className="today-section-sub">
+              {entDone} / {entTiles.length} done · {formatMinutesLabel(entAllocatedSec)} / {entertainmentBudgetMin}m
+              {entConsumedSec > 0 ? ` · ${formatMinutesLabel(entConsumedSec)} watched` : ''}
+            </span>
+          </div>
+          <div className="card-grid">
+            {entTiles.map((entry, idx) => {
+              const item = entry.item
+              const isCompleted = entry.completed
+              const tileDur = item.duration || (item.durationSec ? formatSeconds(item.durationSec) : '')
+              return (
+                <div
+                  key={`ent-${item.id}-${idx}`}
+                  className={`card${isCompleted ? ' watched' : ''}`}
+                  onClick={() => onOpen(item)}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    setMenu({ x: e.clientX, y: e.clientY, item })
+                  }}
+                  style={{ position: 'relative', ...(isCompleted ? { opacity: 0.5 } : {}) }}
+                >
+                  {!isCompleted && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        if (confirm(`Skip "${item.title}" today? It'll move to Done and a new entertainment video will take its place.`)) {
+                          onSkipFromToday(item.id)
+                        }
+                      }}
+                      title="Skip this video (move to Done and bring in a replacement)"
+                      style={{
+                        position: 'absolute', top: 6, right: 6,
+                        background: 'transparent', border: '1px solid var(--hairline)',
+                        color: 'var(--ink-faint)', borderRadius: 4, padding: '2px 7px',
+                        fontSize: 11, fontFamily: 'var(--mono)', cursor: 'pointer', opacity: 0.6
+                      }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = '1' }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = '0.6' }}
+                    >skip</button>
+                  )}
+                  {isCompleted && <div className="watched-badge">Watched</div>}
+                  <div className="card-chip">
+                    <div className="pip" style={{ background: 'oklch(0.70 0.13 60)' }} />
+                    <span className="label">Entertainment{tileDur ? ` · ${tileDur}` : ''}</span>
+                  </div>
+                  <h3
+                    className="card-title"
+                    style={isCompleted ? { textDecoration: 'line-through' } : undefined}
+                  >
+                    {item.title}
+                  </h3>
+                  <div className="card-meta">
+                    <span className="creator">{item.creator}</span>
+                    <span className="url">{shortLabelForUrl(item.url)}</span>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
 
       {routineCount > 0 && (
         <div className="routine-summary" onClick={onOpenRoutine}>

@@ -45,7 +45,7 @@ export function Notes({ items, categories, onOpen, onDetach, onBack }: Props) {
                   >
                     <div className="card-chip">
                       <div className="pip" style={{ background: cat.color }} />
-                      <span className="label">{item.bucket === 'SUN' ? 'Sunday' : cat.name}</span>
+                      <span className="label">{item.bucket === 'SUN' ? 'Entertainment' : cat.name}</span>
                       {item.note && (
                         <span className="label" style={{ marginLeft: 8, opacity: 0.7 }}>
                           📝 {item.note.label}

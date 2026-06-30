@@ -18,7 +18,7 @@ const STORAGE_KEY = 'hearth-cellar-store'
 
 const DEFAULT_STORE: PersistedStore = {
   schemaVersion: 6,
-  mode: new Date().getDay() === 0 ? 'SUN' : 'WKDY',
+  mode: 'WKDY',
   loop: [],
   todayPlan: null,
   courses: [],

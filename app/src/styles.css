@@ -2529,15 +2529,16 @@ input { font-family: inherit; }
   color: var(--ember-ink);
 }
 
-/* ─── Kanban Board (horizontal rows) ─────────────────
- * Each category is a full-width row stacked vertically. Cards inside the
- * row are laid out left-to-right and the row scrolls horizontally if it
- * has too many cards. Vertical scroll = scroll the page to see more rows.
+/* ─── Kanban Board (DFD-style rows, cards wrap) ─────────────────
+ * Each category is a full-width row. The category label sits on the LEFT
+ * as a narrow sidebar (like the label edge of a DFD data store). Cards
+ * fill the remaining width and WRAP onto extra lines when they don't fit
+ * — no horizontal scroll. Page-level vertical scroll handles overflow.
  */
 .kanban-board {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
   padding-bottom: 16px;
   min-height: 200px;
 }
@@ -2546,7 +2547,8 @@ input { font-family: inherit; }
   border: 1px solid var(--hairline-soft);
   border-radius: var(--radius);
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: stretch;
   transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease);
   animation: fadeUp 0.4s var(--ease);
 }
@@ -2555,13 +2557,16 @@ input { font-family: inherit; }
   box-shadow: 0 0 0 2px oklch(0.640 0.150 47 / 0.18);
 }
 .kanban-col-head {
+  flex: 0 0 120px;
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 14px 16px 10px;
-  border-bottom: 1px solid var(--hairline-soft);
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 6px;
+  padding: 16px 12px;
+  border-right: 1px solid var(--hairline-soft);
   background: var(--paper-deep);
-  border-radius: var(--radius) var(--radius) 0 0;
+  border-radius: var(--radius) 0 0 var(--radius);
 }
 .kanban-col-dot {
   width: 10px;
@@ -2574,8 +2579,9 @@ input { font-family: inherit; }
   font-size: 13px;
   font-weight: 600;
   color: var(--ink);
-  flex: 1;
-  min-width: 0;
+  width: 100%;
+  word-wrap: break-word;
+  line-height: 1.25;
 }
 .kanban-col-count {
   font-family: var(--mono);
@@ -2584,17 +2590,19 @@ input { font-family: inherit; }
   background: var(--card);
   border-radius: 10px;
   padding: 2px 8px;
+  margin-top: auto;
 }
 .kanban-col-body {
   flex: 1;
-  overflow-x: auto;
-  overflow-y: hidden;
+  min-width: 0;
   padding: 14px;
   display: flex;
   flex-direction: row;
-  align-items: stretch;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  align-content: flex-start;
   gap: 12px;
-  min-height: 60px;
+  min-height: 80px;
 }
 .kanban-empty {
   display: flex;

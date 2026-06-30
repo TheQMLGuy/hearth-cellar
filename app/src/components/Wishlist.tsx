@@ -86,7 +86,7 @@ export function Wishlist({
                   </button>
                   <div className="card-chip" onClick={() => onOpen(item)} style={{ cursor: 'pointer' }}>
                     <div className="pip" style={{ background: cat.color }} />
-                    <span className="label">{item.bucket === 'SUN' ? 'Sunday' : cat.name}{dur ? ` · ${dur}` : ''}</span>
+                    <span className="label">{item.bucket === 'SUN' ? 'Entertainment' : cat.name}{dur ? ` · ${dur}` : ''}</span>
                   </div>
                   <h3 className="card-title" onClick={() => onOpen(item)} style={{ cursor: 'pointer' }}>{item.title}</h3>
                   <div className="card-meta" onClick={() => onOpen(item)} style={{ cursor: 'pointer' }}>
@@ -106,11 +106,13 @@ export function Wishlist({
                       <button
                         className={item.bucket === 'WKDY' ? 'active' : ''}
                         onClick={() => onSetBucket(item.id, 'WKDY')}
-                      >WKDY</button>
+                        title="Daily plan (category-budgeted)"
+                      >Daily</button>
                       <button
                         className={item.bucket === 'SUN' ? 'active' : ''}
                         onClick={() => onSetBucket(item.id, 'SUN')}
-                      >SUN</button>
+                        title="Entertainment strip (60m/day)"
+                      >Ent</button>
                     </div>
                     <button
                       className="ingest-save"

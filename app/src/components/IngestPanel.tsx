@@ -224,8 +224,8 @@ export function IngestPanel({
                   <>
                     <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-faint)', marginLeft: 8 }}>FOR</span>
                     <div className="bucket-pill">
-                      <button className={bucket === 'WKDY' ? 'active' : ''} onClick={() => setBucket('WKDY')}>Weekday</button>
-                      <button className={bucket === 'SUN' ? 'active' : ''} onClick={() => setBucket('SUN')}>Sunday</button>
+                      <button className={bucket === 'WKDY' ? 'active' : ''} onClick={() => setBucket('WKDY')}>Daily plan</button>
+                      <button className={bucket === 'SUN' ? 'active' : ''} onClick={() => setBucket('SUN')} title="Daily Entertainment strip (60m cap)">Entertainment</button>
                     </div>
                   </>
                 )}
@@ -236,8 +236,8 @@ export function IngestPanel({
               <div className="ingest-row" style={{ gap: 12, alignItems: 'center' }}>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-faint)' }}>FOR</span>
                 <div className="bucket-pill">
-                  <button className={bucket === 'WKDY' ? 'active' : ''} onClick={() => setBucket('WKDY')}>Weekday</button>
-                  <button className={bucket === 'SUN' ? 'active' : ''} onClick={() => setBucket('SUN')}>Sunday</button>
+                  <button className={bucket === 'WKDY' ? 'active' : ''} onClick={() => setBucket('WKDY')}>Daily plan</button>
+                  <button className={bucket === 'SUN' ? 'active' : ''} onClick={() => setBucket('SUN')} title="Daily Entertainment strip (60m cap)">Entertainment</button>
                 </div>
               </div>
             )}
@@ -261,7 +261,7 @@ export function IngestPanel({
             )}
             {!isPlaylist && saveAs === 'loop' && bucket === 'SUN' && (
               <div className="ingest-row" style={{ justifyContent: 'flex-end' }}>
-                <button className="ingest-save" disabled={!canSave} onClick={handleSave}>Save to Sunday</button>
+                <button className="ingest-save" disabled={!canSave} onClick={handleSave}>Save to Entertainment</button>
               </div>
             )}
             {(isPlaylist || saveAs === 'routine') && (

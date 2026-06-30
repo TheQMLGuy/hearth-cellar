@@ -120,6 +120,9 @@ export interface DayPlan {
    * video). When absent (legacy plan), fall back to `itemIds`.
    */
   parts?: Part[]
+  /** Daily Entertainment strip: SUN-bucket items capped at ~60 min total.
+   * Sticky for the day same as `parts`. Rendered above the main plan. */
+  entertainmentParts?: Part[]
 }
 
 export interface Course {

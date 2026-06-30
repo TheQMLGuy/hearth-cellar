@@ -19,6 +19,7 @@ import { loadStore, saveStore, weekStartIso } from './storeClient'
 import {
   autoMode,
   computeDayPlan,
+  computeEntertainmentPlan,
   itemsForPlan,
   planIsStale,
   todayKey
@@ -51,7 +52,7 @@ function recomputePlan(
   s: PersistedStore,
   channelBucketByChannelId: Record<string, Bucket>
 ) {
-  return computeDayPlan({
+  const plan = computeDayPlan({
     loop: s.loop,
     mode: s.mode,
     channelFresh: s.channelFresh,
@@ -61,6 +62,14 @@ function recomputePlan(
     sliceTargetSec: (s.sliceTargetMin ?? 30) * 60,
     categories: s.categories
   })
+  // Entertainment is a sibling strip on Today — also sticky for the day,
+  // also recomputed whenever the main plan recomputes (refresh, day rollover,
+  // ingest, skip, etc.). Pulls from SUN-bucket loop items.
+  const ent = computeEntertainmentPlan({
+    loop: s.loop,
+    entertainmentMinutes: s.sundayMinutes ?? 60
+  })
+  return { ...plan, entertainmentParts: ent.parts }
 }
 
 export function App() {
@@ -1646,6 +1655,21 @@ export function App() {
     return itemsForPlan(store.todayPlan, combined)
   }, [store])
 
+  // Resolve the entertainment parts -> LoopItem objects (matching by id).
+  // Same dual-source lookup as todayItems so a watched-today entertainment
+  // tile keeps rendering even after the item moves into done.items.
+  const entertainmentItems = useMemo<LoopItem[]>(() => {
+    if (!store || !store.todayPlan?.entertainmentParts) return []
+    const combined = [...store.loop, ...store.done.items]
+    const byId = new Map(combined.map((i) => [i.id, i]))
+    const out: LoopItem[] = []
+    for (const p of store.todayPlan.entertainmentParts) {
+      const it = byId.get(p.itemId)
+      if (it) out.push(it)
+    }
+    return out
+  }, [store])
+
 
   // Notes promotion rule: video appears in Notes view iff (a) it has a note
   // attached AND (b) has been watched-to-done at least once. Aggregates both
@@ -1836,6 +1860,9 @@ export function App() {
             <Today
               items={todayItems}
               parts={store.todayPlan?.parts ?? []}
+              entertainmentItems={entertainmentItems}
+              entertainmentParts={store.todayPlan?.entertainmentParts ?? []}
+              entertainmentBudgetMin={store.sundayMinutes ?? 60}
               progress={store.progress}
               totalBudgetMin={totalBudgetMin}
               mode={store.mode}
