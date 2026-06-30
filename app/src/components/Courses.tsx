@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { Fragment, useRef, useState } from 'react'
 import type { Course, CourseCategory } from '../types'
 import { parseYouTubeUrl } from '../lib/youtube'
 import { newId } from '../lib/ids'
@@ -63,6 +63,10 @@ export function Courses({
   const [drafting, setDrafting] = useState(false)
   const [error, setError] = useState('')
   const [dragOverCol, setDragOverCol] = useState<string | null>(null)
+  /** Which card the drag is currently hovering over (drop will insert before
+   * it). null while still in column space but not over any specific card —
+   * the line then renders at the end. */
+  const [dragOverBeforeId, setDragOverBeforeId] = useState<string | null>(null)
   const [editState, setEditState] = useState<EditState | null>(null)
   const dragDataRef = useRef<string | null>(null)
   const isDraggingRef = useRef(false)
@@ -234,26 +238,32 @@ export function Courses({
   function onDragEnd(e: React.DragEvent) {
     isDraggingRef.current = false
     setDragOverCol(null)
+    setDragOverBeforeId(null)
     dragDataRef.current = null
     const target = e.currentTarget as HTMLElement
     target.classList.remove('dragging')
   }
-  function onDragOver(e: React.DragEvent, colId: string) {
+  function onDragOver(e: React.DragEvent, colId: string, beforeId: string | null = null) {
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
     if (dragOverCol !== colId) setDragOverCol(colId)
+    if (dragOverBeforeId !== beforeId) setDragOverBeforeId(beforeId)
   }
   function onDragLeave(e: React.DragEvent, colId: string) {
     // Only clear if truly leaving the column
     const related = e.relatedTarget as HTMLElement | null
     const colEl = (e.currentTarget as HTMLElement)
     if (related && colEl.contains(related)) return
-    if (dragOverCol === colId) setDragOverCol(null)
+    if (dragOverCol === colId) {
+      setDragOverCol(null)
+      setDragOverBeforeId(null)
+    }
   }
   function onDrop(e: React.DragEvent, colId: string, beforeId: string | null = null) {
     e.preventDefault()
     e.stopPropagation()
     setDragOverCol(null)
+    setDragOverBeforeId(null)
     const courseId = dragDataRef.current ?? e.dataTransfer.getData('text/plain')
     if (!courseId || courseId === beforeId) return
     const newCat = colId === UNCATEGORIZED_ID ? null : colId
@@ -424,24 +434,30 @@ export function Courses({
                    * webview builds the drop event got eaten by the cards'
                    * own draggable=true children. Wiring drag/drop directly
                    * on the body too makes the drop zone unambiguous. */
-                  onDragOver={(e) => onDragOver(e, col.id)}
+                  /* col-body's own dragover passes beforeId=null so the
+                   * indicator anchors to the END of the column when the
+                   * pointer is over empty space below the last card. */
+                  onDragOver={(e) => onDragOver(e, col.id, null)}
                   onDrop={(e) => onDrop(e, col.id)}
                 >
                   {col.courses.length === 0 ? (
                     <div
                       className="kanban-empty"
-                      onDragOver={(e) => onDragOver(e, col.id)}
+                      onDragOver={(e) => onDragOver(e, col.id, null)}
                       onDrop={(e) => onDrop(e, col.id)}
                     >Drag courses here</div>
                   ) : (
                     col.courses.map((c) => (
+                      <Fragment key={c.id}>
+                        {dragOverCol === col.id && dragOverBeforeId === c.id && (
+                          <div className="kanban-drop-line" />
+                        )}
                       <div
-                        key={c.id}
                         className="course-card"
                         draggable
                         onDragStart={(e) => onDragStart(e, c.id)}
                         onDragEnd={onDragEnd}
-                        onDragOver={(e) => onDragOver(e, col.id)}
+                        onDragOver={(e) => onDragOver(e, col.id, c.id)}
                         /* Drop on a specific card inserts the dragged card
                          * BEFORE this one (within-column reorder). Drop on
                          * the column body or empty state appends to the
@@ -495,7 +511,14 @@ export function Courses({
                           </div>
                         </div>
                       </div>
+                      </Fragment>
                     ))
+                  )}
+                  {/* Tail indicator — drag is in this column but not over
+                   * any specific card (pointer is in empty space at the
+                   * bottom). Shows where an append-to-end would land. */}
+                  {dragOverCol === col.id && dragOverBeforeId === null && col.courses.length > 0 && (
+                    <div className="kanban-drop-line" />
                   )}
                 </div>
               </div>
