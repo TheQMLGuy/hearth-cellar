@@ -328,7 +328,7 @@ export type GooglePollResult =
   | { status: 'denied' }
   | { status: 'error'; message: string }
 
-export type Screen = 'today' | 'player' | 'courses' | 'courseFocus' | 'routine' | 'settings' | 'notes' | 'wishlist' | 'noteStudy'
+export type Screen = 'today' | 'player' | 'courses' | 'courseFocus' | 'routine' | 'settings' | 'notes' | 'wishlist' | 'entertainment' | 'noteStudy'
 
 declare global {
   interface Window {

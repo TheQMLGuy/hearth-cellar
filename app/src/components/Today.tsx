@@ -9,12 +9,6 @@ interface Props {
   items: LoopItem[]
   /** Parts in display order for today (may be empty for legacy plans). */
   parts: Part[]
-  /** Entertainment strip — SUN-bucket loop items, picked daily under a
-   * fixed minute budget (default 60m). Same LoopItem objects as items but
-   * scoped to the entertainment row. */
-  entertainmentItems: LoopItem[]
-  entertainmentParts: Part[]
-  entertainmentBudgetMin: number
   /** Per-video progress state. */
   progress: Record<string, VideoProgress>
   /** Sum of minutes-per-day budgets across enabled categories — for the header. */
@@ -64,9 +58,6 @@ interface MenuState {
 export function Today({
   items,
   parts,
-  entertainmentItems,
-  entertainmentParts,
-  entertainmentBudgetMin,
   progress,
   totalBudgetMin,
   routineCount,
@@ -126,22 +117,6 @@ export function Today({
   const consumedSec = tiles.reduce((acc, t) => (t.completed ? acc + tileSec(t) : acc), 0)
   const allocatedSec = tiles.reduce((acc, t) => acc + tileSec(t), 0)
 
-  // Build the entertainment strip tiles using the same shape.
-  const entTiles: TileEntry[] = (() => {
-    const byId = new Map(entertainmentItems.map((i) => [i.id, i]))
-    return entertainmentParts
-      .map<TileEntry | null>((p) => {
-        const item = byId.get(p.itemId)
-        if (!item) return null
-        const done = progress[item.videoId]?.completed === true || watched.has(item.id)
-        return { item, part: p, completed: done }
-      })
-      .filter((x): x is TileEntry => x !== null)
-  })()
-  const entAllocatedSec = entTiles.reduce((acc, t) => acc + tileSec(t), 0)
-  const entConsumedSec = entTiles.reduce((acc, t) => (t.completed ? acc + tileSec(t) : acc), 0)
-  const entDone = entTiles.filter((t) => t.completed).length
-
   const sessionPct = courseSessionLimit > 0
     ? Math.min(100, Math.round((courseSessionsToday / courseSessionLimit) * 100))
     : 0
@@ -176,97 +151,8 @@ export function Today({
         </div>
       </div>
 
-      <>
-        <div className="today-section-head">
-          <h2>Entertainment</h2>
-          <span className="today-section-sub">
-            {entTiles.length > 0
-              ? (
-                <>
-                  {entDone} / {entTiles.length} done · {formatMinutesLabel(entAllocatedSec)} / {entertainmentBudgetMin}m
-                  {entConsumedSec > 0 ? ` · ${formatMinutesLabel(entConsumedSec)} watched` : ''}
-                </>
-              )
-              : `${entertainmentBudgetMin}m/day · the eating-time strip`}
-          </span>
-        </div>
-        {entTiles.length === 0 ? (
-          <div
-            className="empty"
-            style={{ marginTop: 0, padding: '16px 24px', borderRadius: 12, background: 'var(--card)', border: '1px dashed var(--hairline)' }}
-          >
-            <p style={{ margin: 0, fontSize: 13, color: 'var(--ink-faint)' }}>
-              Nothing here yet. Press <kbd>Ctrl</kbd> <kbd>I</kbd> and pick the
-              {' '}<strong>Entertainment</strong> target to add short videos for
-              eating-time. They show up here daily, capped at {entertainmentBudgetMin}m.
-              {' '}
-              <button
-                onClick={onTriggerIngest}
-                style={{
-                  background: 'transparent', border: 'none', padding: 0,
-                  color: 'var(--ember)', cursor: 'pointer', textDecoration: 'underline',
-                  fontSize: 13, fontFamily: 'inherit'
-                }}
-              >Ingest one now →</button>
-            </p>
-          </div>
-        ) : (
-          <div className="card-grid">
-            {entTiles.map((entry, idx) => {
-              const item = entry.item
-              const isCompleted = entry.completed
-              const tileDur = item.duration || (item.durationSec ? formatSeconds(item.durationSec) : '')
-              return (
-                <div
-                  key={`ent-${item.id}-${idx}`}
-                  className={`card${isCompleted ? ' watched' : ''}`}
-                  onClick={() => onOpen(item)}
-                  onContextMenu={(e) => {
-                    e.preventDefault()
-                    setMenu({ x: e.clientX, y: e.clientY, item })
-                  }}
-                  style={{ position: 'relative', ...(isCompleted ? { opacity: 0.5 } : {}) }}
-                >
-                  {!isCompleted && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        if (confirm(`Skip "${item.title}" today? It'll move to Done and a new entertainment video will take its place.`)) {
-                          onSkipFromToday(item.id)
-                        }
-                      }}
-                      title="Skip this video (move to Done and bring in a replacement)"
-                      style={{
-                        position: 'absolute', top: 6, right: 6,
-                        background: 'transparent', border: '1px solid var(--hairline)',
-                        color: 'var(--ink-faint)', borderRadius: 4, padding: '2px 7px',
-                        fontSize: 11, fontFamily: 'var(--mono)', cursor: 'pointer', opacity: 0.6
-                      }}
-                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = '1' }}
-                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = '0.6' }}
-                    >skip</button>
-                  )}
-                  {isCompleted && <div className="watched-badge">Watched</div>}
-                  <div className="card-chip">
-                    <div className="pip" style={{ background: 'oklch(0.70 0.13 60)' }} />
-                    <span className="label">Entertainment{tileDur ? ` · ${tileDur}` : ''}</span>
-                  </div>
-                  <h3
-                    className="card-title"
-                    style={isCompleted ? { textDecoration: 'line-through' } : undefined}
-                  >
-                    {item.title}
-                  </h3>
-                  <div className="card-meta">
-                    <span className="creator">{item.creator}</span>
-                    <span className="url">{shortLabelForUrl(item.url)}</span>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </>
+      {/* Entertainment now lives on its own top-nav screen, not as a Today
+          strip. Today is back to: routine summary → daily plan → courses. */}
 
       {routineCount > 0 && (
         <div className="routine-summary" onClick={onOpenRoutine}>

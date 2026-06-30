@@ -40,6 +40,7 @@ import { Routine } from './components/Routine'
 import { Settings } from './components/Settings'
 import { Notes } from './components/Notes'
 import { Wishlist } from './components/Wishlist'
+import { Entertainment } from './components/Entertainment'
 import { AttachNoteModal } from './components/AttachNoteModal'
 import { BreakOverlay } from './components/BreakOverlay'
 import { NoteStudyView } from './components/NoteStudyView'
@@ -1854,15 +1855,13 @@ export function App() {
           onGoSettings={() => setScreen('settings')}
           onGoNotes={() => setScreen('notes')}
           onGoWishlist={() => setScreen('wishlist')}
+          onGoEntertainment={() => setScreen('entertainment')}
         />
         <div className="body">
           {screen === 'today' && (
             <Today
               items={todayItems}
               parts={store.todayPlan?.parts ?? []}
-              entertainmentItems={entertainmentItems}
-              entertainmentParts={store.todayPlan?.entertainmentParts ?? []}
-              entertainmentBudgetMin={store.sundayMinutes ?? 60}
               progress={store.progress}
               totalBudgetMin={totalBudgetMin}
               mode={store.mode}
@@ -2196,6 +2195,27 @@ export function App() {
               onSetBucket={handleSetWishlistBucket}
               onTriggerIngest={() => setIngestOpen(true)}
               onBack={() => setScreen('today')}
+            />
+          )}
+
+          {screen === 'entertainment' && (
+            <Entertainment
+              items={entertainmentItems}
+              parts={store.todayPlan?.entertainmentParts ?? []}
+              progress={store.progress}
+              budgetMin={store.sundayMinutes ?? 60}
+              watched={watchedSet}
+              dateLabel={dateLabel}
+              onOpen={(it) => {
+                setActiveItem(it)
+                setScreen('player')
+              }}
+              onTriggerIngest={() => setIngestOpen(true)}
+              onToggleWatched={handleToggleWatched}
+              onRemoveFromLoop={handleDeleteVideo}
+              onSkipFromToday={handleSkipFromToday}
+              onRefreshPlan={handleRefreshTodayPlan}
+              syncing={syncing}
             />
           )}
 

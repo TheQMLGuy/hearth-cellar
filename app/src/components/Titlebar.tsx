@@ -11,16 +11,18 @@ interface Props {
   onGoSettings: () => void
   onGoNotes: () => void
   onGoWishlist: () => void
+  onGoEntertainment: () => void
 }
 
 export function Titlebar(props: Props) {
-  const { mode, screen, onToggleIngest, onGoToday, onGoCourses, onGoRoutine, onGoSettings, onGoNotes, onGoWishlist } = props
+  const { mode, screen, onToggleIngest, onGoToday, onGoCourses, onGoRoutine, onGoSettings, onGoNotes, onGoWishlist, onGoEntertainment } = props
   void mode
   const inCourses = screen === 'courses' || screen === 'courseFocus'
   const inRoutine = screen === 'routine'
   const inSettings = screen === 'settings'
   const inNotes = screen === 'notes'
   const inWishlist = screen === 'wishlist'
+  const inEntertainment = screen === 'entertainment'
   const inToday = screen === 'today'
 
   return (
@@ -60,6 +62,12 @@ export function Titlebar(props: Props) {
             onClick={onGoCourses}
           >
             Courses
+          </button>
+          <button
+            className={inEntertainment ? 'seg active' : 'seg'}
+            onClick={onGoEntertainment}
+          >
+            Entertainment
           </button>
           <button
             className={inNotes ? 'seg active' : 'seg'}
