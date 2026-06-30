@@ -2529,26 +2529,24 @@ input { font-family: inherit; }
   color: var(--ember-ink);
 }
 
-/* ─── Kanban Board Columns ─── */
+/* ─── Kanban Board (horizontal rows) ─────────────────
+ * Each category is a full-width row stacked vertically. Cards inside the
+ * row are laid out left-to-right and the row scrolls horizontally if it
+ * has too many cards. Vertical scroll = scroll the page to see more rows.
+ */
 .kanban-board {
   display: flex;
-  gap: 16px;
-  overflow-x: auto;
+  flex-direction: column;
+  gap: 18px;
   padding-bottom: 16px;
-  min-height: 300px;
-  align-items: flex-start;
+  min-height: 200px;
 }
 .kanban-col {
-  flex: 0 0 280px;
-  min-width: 280px;
   background: var(--paper-deep);
   border: 1px solid var(--hairline-soft);
   border-radius: var(--radius);
   display: flex;
   flex-direction: column;
-  /* Columns grow to fit their cards; the page itself scrolls vertically.
-   * Per-column scrollbars would clip individual cards behind a fold and
-   * force you to scroll N times to see everything. */
   transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease);
   animation: fadeUp 0.4s var(--ease);
 }
@@ -2562,11 +2560,8 @@ input { font-family: inherit; }
   gap: 8px;
   padding: 14px 16px 10px;
   border-bottom: 1px solid var(--hairline-soft);
-  position: sticky;
-  top: 0;
   background: var(--paper-deep);
   border-radius: var(--radius) var(--radius) 0 0;
-  z-index: 2;
 }
 .kanban-col-dot {
   width: 10px;
@@ -2592,11 +2587,13 @@ input { font-family: inherit; }
 }
 .kanban-col-body {
   flex: 1;
-  overflow-y: auto;
-  padding: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 14px;
   display: flex;
-  flex-direction: column;
-  gap: 10px;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 12px;
   min-height: 60px;
 }
 .kanban-empty {
@@ -2612,9 +2609,11 @@ input { font-family: inherit; }
   font-family: var(--serif);
   opacity: 0.6;
 }
-/* Orange "you'll drop here" indicator between cards during a drag. */
+/* Orange "you'll drop here" indicator between cards during a drag.
+ * In horizontal row layout, the line is a VERTICAL bar between cards. */
 .kanban-drop-line {
-  height: 3px;
+  width: 3px;
+  align-self: stretch;
   background: var(--ember);
   border-radius: 2px;
   box-shadow: 0 0 8px var(--ember);
@@ -2634,11 +2633,13 @@ input { font-family: inherit; }
   border-radius: 12px;
   overflow: hidden;
   cursor: grab;
-  /* The column body is a flex container with overflow-y:auto. Without
-   * flex-shrink:0 the cards shrink to fit the column height (titles get
-   * clipped, footer disappears) before the scrollbar appears. Lock the
-   * card to its natural height so the COLUMN scrolls instead. */
-  flex-shrink: 0;
+  /* Fixed width in horizontal-row layout — cards line up side by side and
+   * the row scrolls horizontally when there are too many. flex-shrink:0
+   * locks the size so a crowded row scrolls instead of squishing cards. */
+  flex: 0 0 260px;
+  width: 260px;
+  display: flex;
+  flex-direction: column;
   transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease), opacity 0.2s;
   animation: fadeUp 0.3s var(--ease);
 }
