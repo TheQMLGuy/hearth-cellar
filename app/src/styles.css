@@ -1511,6 +1511,8 @@ input { font-family: inherit; }
   border: 1px solid var(--hairline);
   border-radius: 10px;
   gap: 2px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
 }
 .unified-toggle .seg {
   appearance: none;
@@ -1518,14 +1520,16 @@ input { font-family: inherit; }
   background: transparent;
   font-family: var(--mono);
   font-size: 10.5px;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
-  padding: 6px 12px;
+  padding: 6px 10px;
   border-radius: 7px;
   color: var(--ink-faint);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.16s var(--ease);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .unified-toggle .seg:hover {
   background: oklch(0.95 0.015 70);
