@@ -24,16 +24,11 @@ export function Wishlist({
   onTriggerIngest,
   onBack
 }: Props) {
+  void onBack // Kept in the Props signature for now — the caller still passes it.
   const catMap = makeCategoryMap(categories.length > 0 ? categories : DEFAULT_CATEGORIES)
   return (
     <div className="screen scroll-pad">
       <div className="page-narrow">
-        <button className="back-link" onClick={onBack}>
-          <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-            <path d="M19 12H5m7-7-7 7 7 7" />
-          </svg>{' '}
-          Back to Today
-        </button>
         <div className="eyebrow">For later</div>
         <h2 className="page-h2">Wishlist</h2>
         <p className="page-lede">
