@@ -2621,6 +2621,82 @@ input { font-family: inherit; }
   font-family: var(--serif);
   opacity: 0.6;
 }
+/* ─── Player: rewatch prompt + shortcut hint ─────────────────
+ * Popup that appears at the end of a video ("Worth rewatching?"), plus a
+ * tiny persistent legend showing the n/p/b keyboard shortcuts. */
+.player-shortcut-hint {
+  position: absolute;
+  bottom: 10px;
+  right: 14px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  opacity: 0.55;
+  pointer-events: none;
+}
+.player-shortcut-hint kbd {
+  font-family: var(--mono);
+  font-size: 10px;
+  background: var(--card);
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin: 0 1px;
+}
+.rewatch-prompt-backdrop {
+  position: fixed;
+  inset: 0;
+  background: oklch(0.20 0.02 60 / 0.55);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 120;
+  animation: fadeUp 0.18s var(--ease);
+}
+.rewatch-prompt-card {
+  background: var(--card);
+  border: 1px solid var(--hairline);
+  border-radius: 16px;
+  padding: 26px 30px;
+  max-width: 420px;
+  box-shadow: 0 20px 60px oklch(0.15 0.02 40 / 0.3);
+}
+.rewatch-prompt-eyebrow {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ember);
+  margin-bottom: 8px;
+}
+.rewatch-prompt-title {
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 22px;
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+.rewatch-prompt-body {
+  font-size: 14px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+  margin-bottom: 22px;
+}
+.rewatch-prompt-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.rewatch-prompt-actions .heart-btn.rewatch-heart {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 14px;
+  border-radius: 8px;
+}
+
 /* Orange "you'll drop here" indicator between cards during a drag.
  * In horizontal row layout, the line is a VERTICAL bar between cards. */
 .kanban-drop-line {

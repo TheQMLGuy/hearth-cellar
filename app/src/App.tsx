@@ -262,6 +262,7 @@ export function App() {
   const handleRemoveCourse = useCallback(
     (id: string) => {
       if (!store) return
+      const course = store.courses.find((c) => c.id === id)
       const courses = store.courses.filter((c) => c.id !== id)
       // Clean up activeCourseByCategory
       const acbc = { ...store.activeCourseByCategory }
@@ -269,11 +270,18 @@ export function App() {
         if (cId === id) delete acbc[catId]
       }
       const firstActive = Object.values(acbc)[0] ?? null
+      // Soft-delete: keep a copy in trash so the user has 30 days to undo.
+      // We got burned by hard deletes once; every removal path now flows
+      // through this bucket unless the user explicitly purges.
+      const trash = course
+        ? [{ deletedAt: new Date().toISOString(), kind: 'course' as const, course }, ...(store.trash ?? [])]
+        : store.trash ?? []
       persist({
         ...store,
         courses,
         activeCourseId: firstActive,
-        activeCourseByCategory: acbc
+        activeCourseByCategory: acbc,
+        trash
       })
     },
     [store, persist]
@@ -351,16 +359,93 @@ export function App() {
   const handleDeleteVideo = useCallback(
     (id: string) => {
       if (!store) return
+      const victim =
+        store.loop.find((it) => it.id === id) ??
+        store.wishlist.find((it) => it.id === id) ??
+        store.done.items.find((it) => it.id === id) ??
+        null
       const loop = store.loop.filter((it) => it.id !== id)
       const wishlist = store.wishlist.filter((it) => it.id !== id)
       const watched = store.watched.filter((v) => v !== id)
-      const updated: PersistedStore = { ...store, loop, wishlist, watched }
+      // Soft-delete: video goes to trash for 30 days. Restore or purge
+      // from Settings → Trash. Guarantees we never destroy user data
+      // just because they hit a red button too fast.
+      const trash = victim
+        ? [{ deletedAt: new Date().toISOString(), kind: 'video' as const, video: victim }, ...(store.trash ?? [])]
+        : store.trash ?? []
+      const updated: PersistedStore = { ...store, loop, wishlist, watched, trash }
       persist({
         ...updated,
         todayPlan: recomputePlan(updated, channelBucketByChannelId)
       })
     },
     [store, persist, channelBucketByChannelId]
+  )
+
+  // Trash handlers — restore or permanent-purge.
+  const handleRestoreFromTrash = useCallback(
+    (idx: number) => {
+      if (!store) return
+      const trash = store.trash ?? []
+      const entry = trash[idx]
+      if (!entry) return
+      const rest = trash.slice(0, idx).concat(trash.slice(idx + 1))
+      if (entry.kind === 'video' && entry.video) {
+        const back = entry.video
+        // Restore to loop unless a matching videoId already lives there.
+        const dup = store.loop.some((it) => it.videoId === back.videoId)
+        const loop = dup ? store.loop : [back, ...store.loop]
+        const updated: PersistedStore = { ...store, loop, trash: rest }
+        persist({ ...updated, todayPlan: recomputePlan(updated, channelBucketByChannelId) })
+      } else if (entry.kind === 'course' && entry.course) {
+        const back = entry.course
+        const dup = store.courses.some((c) => c.id === back.id)
+        const courses = dup ? store.courses : [back, ...store.courses]
+        persist({ ...store, courses, trash: rest })
+      }
+    },
+    [store, persist, channelBucketByChannelId]
+  )
+
+  const handlePurgeFromTrash = useCallback(
+    (idx: number) => {
+      if (!store) return
+      const trash = store.trash ?? []
+      const rest = trash.slice(0, idx).concat(trash.slice(idx + 1))
+      persist({ ...store, trash: rest })
+    },
+    [store, persist]
+  )
+
+  const handleEmptyTrash = useCallback(() => {
+    if (!store) return
+    if (!confirm(`Permanently delete all ${store.trash?.length ?? 0} items in trash? This cannot be undone.`)) return
+    persist({ ...store, trash: [] })
+  }, [store, persist])
+
+  const handleAddBookmark = useCallback(
+    (item: LoopItem, sec: number, note: string) => {
+      if (!store) return
+      const bm = {
+        id: `bm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        videoId: item.videoId,
+        itemId: item.id,
+        videoTitle: item.title,
+        sec,
+        note,
+        createdAt: new Date().toISOString()
+      }
+      persist({ ...store, bookmarks: [bm, ...(store.bookmarks ?? [])] })
+    },
+    [store, persist]
+  )
+
+  const handleRemoveBookmark = useCallback(
+    (id: string) => {
+      if (!store) return
+      persist({ ...store, bookmarks: (store.bookmarks ?? []).filter((b) => b.id !== id) })
+    },
+    [store, persist]
   )
 
   const markWatchedNow = useCallback(
@@ -395,9 +480,36 @@ export function App() {
       const next = mark
         ? Array.from(new Set([...current, videoId]))
         : current.filter((v) => v !== videoId)
+      // Update course streak on a NEW mark. If the last watch was:
+      //   - today: no-op (already counted)
+      //   - yesterday: extend streak by 1
+      //   - older: reset to 1 (broke the chain)
+      // Unmark doesn't touch the streak — undoing a mark shouldn't rewrite history.
+      const streaks = { ...(store.courseStreaks ?? {}) }
+      if (mark) {
+        const today = todayKey()
+        const prev = streaks[courseId]
+        if (!prev || prev.lastWatchedDate !== today) {
+          const dayMs = 86_400_000
+          const nowMid = new Date(); nowMid.setHours(0, 0, 0, 0)
+          const yesterday = new Date(nowMid.getTime() - dayMs)
+          const y = yesterday.getFullYear()
+          const m = String(yesterday.getMonth() + 1).padStart(2, '0')
+          const d = String(yesterday.getDate()).padStart(2, '0')
+          const yKey = `${y}-${m}-${d}`
+          const extended = prev && prev.lastWatchedDate === yKey
+          const current = extended ? prev.currentStreak + 1 : 1
+          streaks[courseId] = {
+            lastWatchedDate: today,
+            currentStreak: current,
+            longestStreak: Math.max(current, prev?.longestStreak ?? 0)
+          }
+        }
+      }
       persist({
         ...store,
-        watchedByCourse: { ...store.watchedByCourse, [courseId]: next }
+        watchedByCourse: { ...store.watchedByCourse, [courseId]: next },
+        courseStreaks: streaks
       })
     },
     [store, persist]
@@ -1927,6 +2039,7 @@ export function App() {
                 hasNote={!!activeItem.note}
                 onAttachNote={() => setAttachNoteFor(activeItem)}
                 onToggleFavorite={() => handleToggleFavorite(activeItem.id)}
+                onBookmark={(sec, note) => handleAddBookmark(activeItem, sec, note)}
                 onDone={() => {
                   // Single setStore + single saveStore. The previous version
                   // called markWatchedNow() (which did its own persist) AND
@@ -2074,6 +2187,7 @@ export function App() {
               courses={store.courses}
               courseCategories={store.courseCategories}
               activeCourseByCategory={store.activeCourseByCategory}
+              courseStreaks={store.courseStreaks}
               onAdd={handleSaveCourse}
               onRemove={handleRemoveCourse}
               onSetActive={handleSetActiveCourseForCategory}
@@ -2130,6 +2244,10 @@ export function App() {
               onDeleteFromQuarantine={handleDeleteFromQuarantine}
               onRestoreFromDone={handleRestoreFromDone}
               onClearDone={handleClearDone}
+              onRestoreFromTrash={handleRestoreFromTrash}
+              onPurgeFromTrash={handlePurgeFromTrash}
+              onEmptyTrash={handleEmptyTrash}
+              onRemoveBookmark={handleRemoveBookmark}
               onBack={() => setScreen('today')}
             />
           )}

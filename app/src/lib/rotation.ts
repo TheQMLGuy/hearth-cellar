@@ -8,6 +8,32 @@ export function todayKey(d: Date = new Date()): string {
   return `${y}-${m}-${day}`
 }
 
+// Cheap deterministic string→uint32 seed. Not cryptographic — just needs
+// to spread `2026-07-01` and `2026-07-02` to different-looking numbers.
+function seedFromDate(key: string): number {
+  let h = 2166136261 >>> 0
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return h >>> 0
+}
+
+// xorshift32(seed ⊕ hash(itemId)) → number in [0, 1). Used as a stable
+// tie-breaker within a priority bucket so the same-priority items don't
+// always appear in the same insertion order.
+function jitter(itemId: string, seed: number): number {
+  let x = seed >>> 0
+  for (let i = 0; i < itemId.length; i++) {
+    x ^= itemId.charCodeAt(i)
+    x = Math.imul(x, 16777619) >>> 0
+  }
+  x ^= x << 13; x >>>= 0
+  x ^= x >>> 17
+  x ^= x << 5; x >>>= 0
+  return (x >>> 0) / 4294967296
+}
+
 export function autoMode(_d: Date = new Date()): Mode {
   // Sunday-mode was killed. SUN-bucket items are now the daily "Entertainment"
   // strip rendered on Today, capped to ~60 min/day. Every day uses WKDY mode
@@ -243,7 +269,17 @@ export function computeEntertainmentPlan(opts: ComputeEntertainmentOpts): {
     if (secs > 0 && secs > budgetSec) return false // can't fit in a day
     return true
   })
-  const sorted = sortByPriority(eligible, new Date())
+  // Deterministic daily shuffle — same order all day, different tomorrow.
+  // xorshift32 seeded by (dateStamp ⊕ item.id hash) gives us a stable but
+  // date-varying tie-breaker on top of the priority sort.
+  const dateSeed = seedFromDate(todayKey())
+  const sorted = sortByPriority(eligible, new Date()).slice().sort((a, b) => {
+    const sa = priorityScore(a, new Date())
+    const sb = priorityScore(b, new Date())
+    if (sa !== sb) return sa - sb
+    // Same priority bucket — shuffle deterministically per day.
+    return jitter(a.id, dateSeed) - jitter(b.id, dateSeed)
+  })
   const parts: Part[] = []
   const ids: string[] = []
   let remaining = budgetSec

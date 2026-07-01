@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { LoopItem } from '../types'
 import { buildEmbedUrl, buildWatchUrl } from '../lib/youtube'
 
@@ -21,6 +21,9 @@ interface Props {
   onClose: () => void
   doneLabel?: string
   doneHint?: string
+  /** Save a mid-video bookmark at the current playback position with a note.
+   * Fired by the `b` key. */
+  onBookmark?: (sec: number, note: string) => void
 }
 
 const NotebookIcon = ({ filled }: { filled: boolean }) => (
@@ -64,15 +67,78 @@ export function Player({
   onDone,
   onClose,
   doneLabel = 'Done',
-  doneHint
+  doneHint,
+  onBookmark
 }: Props) {
+  // Rewatch prompt state — pops up when auto-done fires OR when the user
+  // clicks Done. Twist: reuses the existing heart icon; clicking heart sends
+  // the just-watched item to Wishlist (that's what heart already does).
+  const [rewatchPromptOpen, setRewatchPromptOpen] = useState(false)
+  const [rewatchArmed, setRewatchArmed] = useState(false) // heart already clicked in this session
+
+  // Keep a live currentTime for chapter/bookmark commands. This is a ref so
+  // the postMessage handler updates don't cause re-renders.
+  const currentTimeRef = useRef<number>(startSec ?? 0)
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (rewatchPromptOpen) return // let the modal own keys
+      // Ignore keys while typing in an input.
+      const t = e.target as HTMLElement
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+      if (e.key === 'Escape') { onClose(); return }
+      // Chapter navigation.
+      if (e.key === 'n' || e.key === 'N') { seekToChapter(+1); return }
+      if (e.key === 'p' || e.key === 'P') { seekToChapter(-1); return }
+      // Mid-video bookmark. Ask for a note inline.
+      if ((e.key === 'b' || e.key === 'B') && onBookmark) {
+        const sec = Math.round(currentTimeRef.current)
+        const note = prompt(`Bookmark at ${formatHms(sec)}. Optional note:`, '')
+        if (note !== null) onBookmark(sec, note)
+        return
+      }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [onClose])
+  }, [onClose, onBookmark, rewatchPromptOpen])
+
+  // Send a `seekTo` command to the player iframe (YouTube IFrame API).
+  function seekTo(sec: number) {
+    const iframe = document.querySelector<HTMLIFrameElement>(`iframe[data-video-id="${item.videoId}"]`)
+    if (!iframe || !iframe.contentWindow) return
+    iframe.contentWindow.postMessage(
+      JSON.stringify({ event: 'command', func: 'seekTo', args: [Math.max(0, sec), true] }),
+      '*'
+    )
+  }
+
+  function seekToChapter(dir: 1 | -1) {
+    const chapters = item.chapters ?? []
+    if (chapters.length === 0) return
+    const cur = currentTimeRef.current
+    // Find current chapter index (largest chapter.startSec <= cur+0.5).
+    let idx = -1
+    for (let i = 0; i < chapters.length; i++) {
+      if (chapters[i].startSec <= cur + 0.5) idx = i
+      else break
+    }
+    const target = Math.min(chapters.length - 1, Math.max(0, idx + dir))
+    if (target === idx && dir === -1) {
+      // Already at first chapter — jump to 0.
+      seekTo(0)
+      return
+    }
+    seekTo(chapters[target].startSec)
+  }
+
+  function formatHms(sec: number): string {
+    const h = Math.floor(sec / 3600)
+    const m = Math.floor((sec % 3600) / 60)
+    const s = sec % 60
+    return h > 0
+      ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+      : `${m}:${String(s).padStart(2, '0')}`
+  }
 
   // Lock start/end at mount time. If we re-derived these from props on every
   // render, the iframe URL would change every time progress flushed, causing
@@ -93,7 +159,6 @@ export function Player({
     autoDoneFiredRef.current = false
 
     function onMessage(e: MessageEvent) {
-      if (autoDoneFiredRef.current) return
       if (!String(e.origin || '').includes('youtube')) return
       // Only listen to messages from OUR iframe — otherwise a second player
       // (e.g. CourseFocus) would fire our onDone.
@@ -105,10 +170,15 @@ export function Player({
         const data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data
         if (!data || !data.info) return
         const info = data.info as { currentTime?: number; playerState?: number }
+        // Track live playhead so chapter/bookmark commands know where we are.
+        if (typeof info.currentTime === 'number') {
+          currentTimeRef.current = info.currentTime
+        }
+        if (autoDoneFiredRef.current) return
         // Natural full-video end — YouTube fires state 0 ('ended').
         if (info.playerState === 0) {
           autoDoneFiredRef.current = true
-          onDone()
+          setRewatchPromptOpen(true)
           return
         }
         // Partitioned end — fire ~1s before endSec to beat YouTube's own
@@ -117,7 +187,7 @@ export function Player({
         const cur = info.currentTime
         if (endSec && typeof cur === 'number' && cur >= endSec - 1) {
           autoDoneFiredRef.current = true
-          onDone()
+          setRewatchPromptOpen(true)
         }
       } catch {
         // ignore non-JSON
@@ -184,7 +254,17 @@ export function Player({
         >
           YouTube ↗
         </a>
-        <button className="done done-primary" onClick={onDone} title={doneHint}>
+        <button
+          className="done done-primary"
+          onClick={() => {
+            // If the video already fired the auto-done (natural end), the
+            // prompt is showing; the Done button then just dismisses it.
+            // Otherwise open the rewatch prompt — mirror the auto-done flow.
+            if (rewatchPromptOpen) { setRewatchPromptOpen(false); onDone(); return }
+            setRewatchPromptOpen(true)
+          }}
+          title={doneHint}
+        >
           {doneLabel}
         </button>
       </div>
@@ -211,6 +291,60 @@ export function Player({
           {item.paras.map((p, i) => (
             <p key={i}>{p}</p>
           ))}
+        </div>
+      )}
+
+      {/* Subtle shortcut hint. Chapter-aware skip (n/p), bookmark (b),
+       * close (Esc). Rendered as a right-aligned tiny caption; visible but
+       * unobtrusive so first-timers discover the keys. */}
+      <div className="player-shortcut-hint">
+        <kbd>n</kbd>/<kbd>p</kbd> chapter · <kbd>b</kbd> bookmark · <kbd>Esc</kbd> close
+      </div>
+
+      {/* Rewatch prompt — the twist on the heart. When the video hits its
+       * end (natural or partition boundary), pop this overlay. Clicking the
+       * heart moves the just-watched item into Wishlist for a return trip;
+       * "No, done" just fires the normal onDone. Either path closes. */}
+      {rewatchPromptOpen && (
+        <div
+          className="rewatch-prompt-backdrop"
+          onClick={() => { setRewatchPromptOpen(false); onDone() }}
+        >
+          <div
+            className="rewatch-prompt-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="rewatch-prompt-eyebrow">Video complete</div>
+            <div className="rewatch-prompt-title">Worth rewatching?</div>
+            <div className="rewatch-prompt-body">
+              Save "{item.title}" to your Wishlist for later. Or move on.
+            </div>
+            <div className="rewatch-prompt-actions">
+              <button
+                className={`heart-btn rewatch-heart ${rewatchArmed ? 'on' : ''}`}
+                onClick={() => {
+                  if (!rewatchArmed) {
+                    // First click on heart: send to wishlist.
+                    onToggleFavorite()
+                    setRewatchArmed(true)
+                  }
+                }}
+                title="Save to Wishlist for a rewatch"
+                aria-label="Save to Wishlist"
+              >
+                <HeartIcon filled={rewatchArmed || isFavorited} />
+                <span style={{ marginLeft: 6 }}>
+                  {rewatchArmed ? 'Saved to Wishlist' : 'Yes, save it'}
+                </span>
+              </button>
+              <button
+                className="ingest-save"
+                onClick={() => { setRewatchPromptOpen(false); onDone() }}
+              >
+                {rewatchArmed ? 'Close' : 'No, done'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

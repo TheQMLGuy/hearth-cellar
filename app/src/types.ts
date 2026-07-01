@@ -249,6 +249,38 @@ export interface PersistedStore {
   /** "Would like to watch eventually" — videos parked outside the daily
    * rotation. Promoted to loop with one click from the Wishlist screen. */
   wishlist: LoopItem[]
+  /** Soft-deleted videos & courses. Auto-purged after 30 days; user can
+   * restore or purge earlier from Settings → Trash. */
+  trash?: TrashEntry[]
+  /** Mid-video bookmarks keyed by videoId+sec. */
+  bookmarks?: Bookmark[]
+  /** Per-course streak state — updated when a course part is marked done. */
+  courseStreaks?: Record<string, CourseStreak>
+}
+
+export interface TrashEntry {
+  /** ISO timestamp of soft-delete. */
+  deletedAt: string
+  /** What was deleted — original object stored verbatim for restore. */
+  kind: 'video' | 'course'
+  video?: LoopItem
+  course?: Course
+}
+
+export interface Bookmark {
+  id: string
+  videoId: string
+  itemId?: string
+  videoTitle: string
+  sec: number
+  note: string
+  createdAt: string
+}
+
+export interface CourseStreak {
+  lastWatchedDate: string
+  currentStreak: number
+  longestStreak: number
 }
 
 export interface PlaylistNotePageMapping {

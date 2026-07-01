@@ -58,7 +58,10 @@ const DEFAULT_STORE: PersistedStore = {
     { id: 'cc_creative', name: 'Creative', color: 'oklch(0.60 0.16 55)' }
   ],
   activeCourseByCategory: {},
-  wishlist: []
+  wishlist: [],
+  trash: [],
+  bookmarks: [],
+  courseStreaks: {}
 }
 
 let migratedFromLocalStorage = false

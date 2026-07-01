@@ -24,6 +24,9 @@ interface Props {
   courses: Course[]
   courseCategories: CourseCategory[]
   activeCourseByCategory: Record<string, string>
+  /** Per-course streak state. Undefined if the course has never been
+   * touched. Shown as a subtle badge on the card. */
+  courseStreaks?: Record<string, import('../types').CourseStreak>
   onAdd: (course: Course) => void
   onRemove: (id: string) => void
   onSetActive: (categoryId: string, courseId: string | null) => void
@@ -48,6 +51,7 @@ export function Courses({
   courses,
   courseCategories,
   activeCourseByCategory,
+  courseStreaks,
   onAdd,
   onRemove,
   onSetActive,
@@ -472,6 +476,15 @@ export function Courses({
                           {c.creator && <div className="course-card-creator">{c.creator}</div>}
                           <div className="course-card-footer">
                             <span className="course-card-bucket">{c.bucket === 'WKDY' ? 'Spark' : 'Ent'}</span>
+                            {(courseStreaks?.[c.id]?.currentStreak ?? 0) > 1 && (
+                              <span
+                                className="course-card-bucket"
+                                title={`Current streak · longest ${courseStreaks?.[c.id]?.longestStreak ?? 0}`}
+                                style={{ background: 'var(--ember-tint)', color: 'var(--ember-ink)', borderColor: 'var(--ember)' }}
+                              >
+                                🔥 {courseStreaks?.[c.id]?.currentStreak}
+                              </span>
+                            )}
                             {activeId === c.id && (
                               <span className="course-card-active">Active</span>
                             )}

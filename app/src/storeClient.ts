@@ -187,6 +187,17 @@ export async function loadStore(): Promise<PersistedStore> {
     s.activeCourseByCategory = acbc
   }
   if (!s.wishlist) s.wishlist = []
+  if (!s.trash) s.trash = []
+  if (!s.bookmarks) s.bookmarks = []
+  if (!s.courseStreaks) s.courseStreaks = {}
+  // Auto-purge trash entries older than 30 days.
+  if (s.trash && s.trash.length > 0) {
+    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000
+    s.trash = s.trash.filter((t) => {
+      const at = Date.parse(t.deletedAt)
+      return Number.isFinite(at) && at >= cutoff
+    })
+  }
   if ((s as any).vault) {
     const rawVault: string[] = (s as any).vault ?? []
     const wishlistVideoIds = new Set(s.wishlist.map((w) => w.videoId))

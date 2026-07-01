@@ -3,6 +3,7 @@ import type { Bucket, CategoryId, Channel, FocusConfig, GoogleAuth, LoopItem, Pe
 import { DEFAULT_CATEGORIES, COLOR_SWATCHES, dotShadowFor, makeCategoryMap } from '../lib/categories'
 import { parseYouTubeUrl, shortLabelForUrl } from '../lib/youtube'
 import { newId } from '../lib/ids'
+import { formatSeconds } from '../lib/duration'
 import { GoogleTab } from './GoogleTab'
 
 interface Props {
@@ -35,10 +36,14 @@ interface Props {
   onDeleteFromQuarantine: (id: string) => void
   onRestoreFromDone: (id: string) => void
   onClearDone: () => void
+  onRestoreFromTrash: (idx: number) => void
+  onPurgeFromTrash: (idx: number) => void
+  onEmptyTrash: () => void
+  onRemoveBookmark: (id: string) => void
   onBack: () => void
 }
 
-type Tab = 'categories' | 'videos' | 'channels' | 'routine' | 'google' | 'focus' | 'general' | 'done'
+type Tab = 'categories' | 'videos' | 'channels' | 'routine' | 'google' | 'focus' | 'general' | 'done' | 'trash' | 'bookmarks'
 
 function BucketPicker({
   value,
@@ -140,6 +145,10 @@ export function Settings(props: Props) {
     onDeleteFromQuarantine,
     onRestoreFromDone,
     onClearDone,
+    onRestoreFromTrash,
+    onPurgeFromTrash,
+    onEmptyTrash,
+    onRemoveBookmark,
     onBack
   } = props
 
@@ -294,6 +303,8 @@ export function Settings(props: Props) {
           <button className={tab === 'channels' ? 'active' : ''} onClick={() => setTab('channels')}>Channels</button>
           <button className={tab === 'google' ? 'active' : ''} onClick={() => setTab('google')}>Google</button>
           <button className={tab === 'focus' ? 'active' : ''} onClick={() => setTab('focus')}>Focus</button>
+          <button className={tab === 'bookmarks' ? 'active' : ''} onClick={() => setTab('bookmarks')}>Bookmarks</button>
+          <button className={tab === 'trash' ? 'active' : ''} onClick={() => setTab('trash')}>Trash</button>
           <button className={tab === 'general' ? 'active' : ''} onClick={() => setTab('general')}>General</button>
         </div>
 
@@ -996,6 +1007,112 @@ export function Settings(props: Props) {
             <p className="page-lede" style={{ marginTop: 18, fontSize: 12.5 }}>
               After {store.focusConfig.courseSessionLimit} course sessions today, courses hide and only loop content remains. Resets at midnight.
             </p>
+          </div>
+        )}
+
+        {tab === 'bookmarks' && (
+          <div className="settings-pane">
+            <p className="page-lede" style={{ margin: '0 0 12px' }}>
+              Bookmarks captured with <kbd>b</kbd> in the player. Click to open the
+              video at that timestamp.
+            </p>
+            {(store.bookmarks ?? []).length === 0 ? (
+              <div className="bucket-section-empty">
+                No bookmarks yet. Press <kbd>b</kbd> while watching to save one.
+              </div>
+            ) : (
+              (store.bookmarks ?? []).map((bm) => (
+                <div key={bm.id} className="vault-row">
+                  <div className="vault-body">
+                    <div className="vault-title">{bm.videoTitle}</div>
+                    <div className="vault-meta">
+                      <span style={{ fontFamily: 'var(--mono)' }}>@{formatSeconds(bm.sec)}</span>
+                      {bm.note && <><span className="dot-sep">·</span><span>{bm.note}</span></>}
+                      <span className="dot-sep">·</span>
+                      <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>
+                        {new Date(bm.createdAt).toLocaleDateString()}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => onRemoveBookmark(bm.id)}
+                    style={{
+                      background: 'transparent', border: '1px solid var(--hairline)',
+                      padding: '4px 10px', fontSize: 11, cursor: 'pointer',
+                      color: 'var(--ink-faint)', borderRadius: 4
+                    }}
+                    title="Remove bookmark"
+                  >Delete</button>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
+        {tab === 'trash' && (
+          <div className="settings-pane">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <p className="page-lede" style={{ margin: 0 }}>
+                Soft-deleted items live here for 30 days. Restore or purge from this list.
+              </p>
+              {(store.trash ?? []).length > 0 && (
+                <button
+                  onClick={onEmptyTrash}
+                  style={{
+                    background: 'transparent', border: '1px solid oklch(0.55 0.15 25)',
+                    color: 'oklch(0.45 0.15 25)', padding: '6px 12px', fontSize: 12,
+                    borderRadius: 4, cursor: 'pointer'
+                  }}
+                  title="Permanently delete every item in trash"
+                >Empty trash</button>
+              )}
+            </div>
+            {(store.trash ?? []).length === 0 ? (
+              <div className="bucket-section-empty">Trash is empty.</div>
+            ) : (
+              (store.trash ?? []).map((entry, idx) => {
+                const label = entry.kind === 'video'
+                  ? entry.video?.title ?? '(untitled video)'
+                  : entry.course?.title ?? '(untitled course)'
+                const creator = entry.kind === 'video' ? entry.video?.creator : entry.course?.creator
+                return (
+                  <div key={`${entry.deletedAt}-${idx}`} className="vault-row">
+                    <div className="vault-body">
+                      <div className="card-chip">
+                        <div className="pip" style={{ background: 'var(--ink-faint)' }} />
+                        <span className="label">{entry.kind === 'video' ? 'Video' : 'Course'}</span>
+                      </div>
+                      <div className="vault-title">{label}</div>
+                      <div className="vault-meta">
+                        {creator && <><span>{creator}</span><span className="dot-sep">·</span></>}
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>
+                          deleted {new Date(entry.deletedAt).toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button
+                        onClick={() => onRestoreFromTrash(idx)}
+                        style={{
+                          background: 'var(--ember-tint)', border: '1px solid var(--ember)',
+                          color: 'var(--ember-ink)', padding: '4px 10px', fontSize: 11,
+                          cursor: 'pointer', borderRadius: 4
+                        }}
+                      >Restore</button>
+                      <button
+                        onClick={() => onPurgeFromTrash(idx)}
+                        style={{
+                          background: 'transparent', border: '1px solid var(--hairline)',
+                          padding: '4px 10px', fontSize: 11, cursor: 'pointer',
+                          color: 'var(--ink-faint)', borderRadius: 4
+                        }}
+                        title="Permanently delete this item"
+                      >Purge</button>
+                    </div>
+                  </div>
+                )
+              })
+            )}
           </div>
         )}
 
