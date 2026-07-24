@@ -6,7 +6,10 @@ interface Props {
   course: Course
   watchedIds: Set<string>
   cachedVideos: PlaylistVideo[] | null
+  cacheFetchedAt?: string | null
   focusTimerLabel: string | null
+  isFocusTimerManuallyPaused?: boolean
+  onToggleFocusTimerPause?: () => void
   /** Per-video resume state. Course videos use the raw YouTube videoId as key. */
   progress: Record<string, VideoProgress>
   /** Notes attached to playlist videos, keyed `${courseId}:${videoId}`. */
@@ -16,6 +19,7 @@ interface Props {
   onVideosFetched: (playlistId: string, videos: PlaylistVideo[]) => void
   onSetOrder: (order: PlaylistOrder, manualOrder?: string[]) => void
   onAttachNoteToPlaylistVideo: (videoId: string, videoTitle: string) => void
+  onActiveVideoChange?: (videoId: string | null) => void
   onBack: () => void
 }
 
@@ -116,7 +120,10 @@ export function CourseFocus({
   course,
   watchedIds,
   cachedVideos,
+  cacheFetchedAt,
   focusTimerLabel,
+  isFocusTimerManuallyPaused,
+  onToggleFocusTimerPause,
   progress,
   playlistNotes,
   onMarkWatched,
@@ -124,6 +131,7 @@ export function CourseFocus({
   onVideosFetched,
   onSetOrder,
   onAttachNoteToPlaylistVideo,
+  onActiveVideoChange,
   onBack
 }: Props) {
   // For single-video courses, synthesise PlaylistVideo entries (one per part)
@@ -152,22 +160,52 @@ export function CourseFocus({
     // Single-video courses already have all data in-memory — skip the API call.
     if (course.singleVideo) return
     let cancelled = false
-    if (cachedVideos && cachedVideos.length > 0) return
-    setLoadState('loading')
+
+    const hasCache = cachedVideos && cachedVideos.length > 0
+    
+    // Skip playlist videos refresh if cached within the last 24 hours
+    let isCacheFresh = false
+    if (hasCache && cacheFetchedAt) {
+      try {
+        const diffMs = Date.now() - new Date(cacheFetchedAt).getTime()
+        const diffHours = diffMs / (1000 * 60 * 60)
+        if (diffHours < 24) {
+          isCacheFresh = true
+        }
+      } catch {
+        // ignore date parse errors
+      }
+    }
+
+    if (!hasCache) {
+      setLoadState('loading')
+    }
+
+    if (isCacheFresh) {
+      return
+    }
+
     window.hearth.fetchPlaylistVideos(course.playlistId).then((list) => {
       if (cancelled) return
-      setRawVideos(list)
-      setLoadState(list.length > 0 ? 'ok' : 'fail')
-      if (list.length > 0) {
+      
+      const cacheIds = (cachedVideos ?? []).map(v => v.videoId).join(',')
+      const fetchedIds = list.map(v => v.videoId).join(',')
+      
+      if (list.length > 0 && fetchedIds !== cacheIds) {
+        setRawVideos(list)
+        setLoadState('ok')
         onVideosFetched(course.playlistId, list)
         const ordered = applyOrder(list, course)
         setActiveIdx(firstNotCompletedIdx(course, ordered, progress, watchedIds))
+      } else if (list.length === 0 && !hasCache) {
+        setLoadState('fail')
       }
     })
+
     return () => {
       cancelled = true
     }
-  }, [course.playlistId])
+  }, [course.playlistId, cacheFetchedAt])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -190,6 +228,12 @@ export function CourseFocus({
       window.clearTimeout(t2)
     }
   }, [current?.videoId])
+
+  useEffect(() => {
+    if (onActiveVideoChange) {
+      onActiveVideoChange(current?.videoId || null)
+    }
+  }, [current?.videoId, onActiveVideoChange])
 
   const watchedCount = orderedVideos.filter((v, i) =>
     watchedIds.has(watchKey(course, v.videoId, i))
@@ -378,9 +422,20 @@ export function CourseFocus({
             )}
           </div>
           {focusTimerLabel && (
-            <div className="focus-pill" title="Focus session — pauses when you pause the video">
-              <span className="focus-dot" />
+            <div className="focus-pill" title="Focus session — ticks at half-speed when video is paused until stopped. Click pause button to hold completely.">
+              <span className={`focus-dot ${isFocusTimerManuallyPaused ? 'paused' : ''}`} />
               {focusTimerLabel}
+              {onToggleFocusTimerPause && (
+                <button
+                  type="button"
+                  className="focus-pill-toggle"
+                  onClick={onToggleFocusTimerPause}
+                  title={isFocusTimerManuallyPaused ? 'Resume focus timer' : 'Manually pause focus timer'}
+                  aria-label={isFocusTimerManuallyPaused ? 'Resume focus timer' : 'Manually pause focus timer'}
+                >
+                  {isFocusTimerManuallyPaused ? '▶' : '❚❚'}
+                </button>
+              )}
             </div>
           )}
           {current && (

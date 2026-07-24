@@ -24,6 +24,7 @@ interface Props {
   courses: Course[]
   courseCategories: CourseCategory[]
   activeCourseByCategory: Record<string, string>
+  courseSessionLimit: number
   /** Per-course streak state. Undefined if the course has never been
    * touched. Shown as a subtle badge on the card. */
   courseStreaks?: Record<string, import('../types').CourseStreak>
@@ -45,12 +46,14 @@ interface EditState {
   catId: string
   name: string
   color: string
+  sessionLimit?: number
 }
 
 export function Courses({
   courses,
   courseCategories,
   activeCourseByCategory,
+  courseSessionLimit,
   courseStreaks,
   onAdd,
   onRemove,
@@ -77,11 +80,12 @@ export function Courses({
   const [selectedCatId, setSelectedCatId] = useState<string>(courseCategories[0]?.id || UNCATEGORIZED_ID)
 
   // Build columns: one per category + uncategorized
-  const columns: { id: string; name: string; color: string; courses: Course[] }[] = [
+  const columns: { id: string; name: string; color: string; sessionLimit?: number; courses: Course[] }[] = [
     ...courseCategories.map((cat) => ({
       id: cat.id,
       name: cat.name,
       color: cat.color,
+      sessionLimit: cat.sessionLimit,
       courses: courses.filter((c) => c.category === cat.id)
     })),
     {
@@ -284,11 +288,11 @@ export function Courses({
     const id = newId('cc_')
     const nextColor = PALETTE[(courseCategories.length) % PALETTE.length]
     onAddCategory({ id, name: 'New Category', color: nextColor })
-    setEditState({ catId: id, name: 'New Category', color: nextColor })
+    setEditState({ catId: id, name: 'New Category', color: nextColor, sessionLimit: 4 })
   }
   function saveEdit() {
     if (!editState) return
-    onUpdateCategory(editState.catId, { name: editState.name, color: editState.color })
+    onUpdateCategory(editState.catId, { name: editState.name, color: editState.color, sessionLimit: editState.sessionLimit })
     setEditState(null)
   }
   function deleteEditCat() {
@@ -359,7 +363,7 @@ export function Courses({
             <button
               key={cat.id}
               className="ccat-pill"
-              onClick={() => setEditState({ catId: cat.id, name: cat.name, color: cat.color })}
+              onClick={() => setEditState({ catId: cat.id, name: cat.name, color: cat.color, sessionLimit: cat.sessionLimit })}
             >
               <span className="ccat-dot" style={{ background: cat.color }} />
               {cat.name}
@@ -381,6 +385,24 @@ export function Courses({
               onKeyDown={(e) => { if (e.key === 'Enter') saveEdit() }}
               placeholder="Category name"
             />
+            <div className="ccat-session-limit" style={{ display: 'flex', alignItems: 'center', margin: '12px 0 10px', gap: '8px' }}>
+              <span style={{ fontSize: '13px', color: 'var(--ink-soft)' }}>Sessions/day:</span>
+              <button
+                className="qty-btn"
+                type="button"
+                onClick={() => setEditState({ ...editState, sessionLimit: Math.max(1, (editState.sessionLimit ?? 4) - 1) })}
+                style={{ width: '28px', height: '28px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >−</button>
+              <span style={{ fontSize: '14px', fontWeight: 'bold', minWidth: '20px', textAlign: 'center', color: 'var(--ink)' }}>
+                {editState.sessionLimit ?? 4}
+              </span>
+              <button
+                className="qty-btn"
+                type="button"
+                onClick={() => setEditState({ ...editState, sessionLimit: Math.min(20, (editState.sessionLimit ?? 4) + 1) })}
+                style={{ width: '28px', height: '28px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >+</button>
+            </div>
             <div className="ccat-color-grid">
               {PALETTE.map((c) => (
                 <button
@@ -429,6 +451,46 @@ export function Courses({
                 <div className="kanban-col-head">
                   <span className="kanban-col-dot" style={{ background: col.color }} />
                   <span className="kanban-col-name">{col.name}</span>
+                  {col.id !== UNCATEGORIZED_ID && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        fontSize: 10,
+                        color: 'var(--ink-faint)',
+                        fontFamily: 'var(--mono)',
+                        marginTop: 4
+                      }}
+                    >
+                      <button
+                        className="qty-btn"
+                        onClick={() => {
+                          const currentLimit = col.sessionLimit ?? courseSessionLimit
+                          onUpdateCategory(col.id, { sessionLimit: Math.max(1, currentLimit - 1) })
+                        }}
+                        style={{ width: 16, height: 16, padding: 0, fontSize: 10, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 0 }}
+                        title="Decrease daily session limit"
+                      >
+                        −
+                      </button>
+                      <span>
+                        {col.sessionLimit ?? courseSessionLimit}
+                      </span>
+                      <button
+                        className="qty-btn"
+                        onClick={() => {
+                          const currentLimit = col.sessionLimit ?? courseSessionLimit
+                          onUpdateCategory(col.id, { sessionLimit: Math.min(20, currentLimit + 1) })
+                        }}
+                        style={{ width: 16, height: 16, padding: 0, fontSize: 10, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 0 }}
+                        title="Increase daily session limit"
+                      >
+                        +
+                      </button>
+                      <span style={{ fontSize: 9, color: 'var(--ink-faint)', marginLeft: 1 }}>/day</span>
+                    </div>
+                  )}
                   <span className="kanban-col-count">{col.courses.length}</span>
                 </div>
                 <div

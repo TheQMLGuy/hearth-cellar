@@ -24,3 +24,4 @@ tauri-plugin-log = "2"
 ureq = { version = "2.10", default-features = false, features = ["tls", "json"] }
 regex = "1"
 rfd = { version = "0.15", default-features = false, features = ["common-controls-v6"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

@@ -26,6 +26,7 @@ export function AttachNoteModal({ item, onClose, onAttach, onDetach }: Props) {
   // and unreliable. Local file works against PDFs you've exported from the
   // tablet (Share > Send as PDF) or any other notes app on your desktop.
   const [sourceTab, setSourceTab] = useState<SourceTab>('local')
+  const [lastSync, setLastSync] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -33,6 +34,7 @@ export function AttachNoteModal({ item, onClose, onAttach, onDetach }: Props) {
       setLoadState('loading')
       const status = await window.hearth.rmStatus()
       if (cancelled) return
+      setLastSync(status.lastSync || null)
       if (!status.paired) {
         setLoadState('unpaired')
         return
@@ -187,13 +189,41 @@ export function AttachNoteModal({ item, onClose, onAttach, onDetach }: Props) {
 
         {loadState === 'ok' && (
           <>
-            <input
-              className="ingest-input text"
-              placeholder="Search documents…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              autoFocus
-            />
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+              <input
+                className="ingest-input text"
+                placeholder="Search documents…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                autoFocus
+                style={{ flex: 1, margin: 0 }}
+              />
+              <button
+                className="ingest-save"
+                onClick={async () => {
+                  setLoadState('loading')
+                  try {
+                    const list = await window.hearth.rmListDocs(true)
+                    if (!Array.isArray(list)) throw new Error('non-array response')
+                    setDocs(list.filter((d) => d.type === 'DocumentType'))
+                    const status = await window.hearth.rmStatus()
+                    setLastSync(status.lastSync || null)
+                    setLoadState(list.length === 0 ? 'fail' : 'ok')
+                  } catch (e) {
+                    setLoadError(String(e))
+                    setLoadState('fail')
+                  }
+                }}
+                style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}
+              >
+                🔄 Sync cloud
+              </button>
+            </div>
+            {lastSync && (
+              <div className="ingest-hint" style={{ fontSize: 10.5, marginTop: -4, marginBottom: 8, textAlign: 'left' }}>
+                Last synced: {new Date(lastSync).toLocaleString()}
+              </div>
+            )}
             <div style={{ marginTop: 12, maxHeight: 240, overflowY: 'auto' }}>
               {filtered.map((d) => (
                 <div

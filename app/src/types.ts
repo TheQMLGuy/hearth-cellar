@@ -17,12 +17,14 @@ export interface Category {
   days?: number[]
   /** Minutes/day budget for this category. Replaces item-count quota. */
   minutesPerDay?: number
+  pinned?: boolean
 }
 
 export interface CourseCategory {
   id: string
   name: string
   color: string
+  sessionLimit?: number
 }
 
 export type PlaylistOrder = 'normal' | 'reverse' | 'manual'
@@ -123,6 +125,7 @@ export interface DayPlan {
   /** Daily Entertainment strip: SUN-bucket items capped at ~60 min total.
    * Sticky for the day same as `parts`. Rendered above the main plan. */
   entertainmentParts?: Part[]
+  activeCategoryIds?: string[]
 }
 
 export interface Course {
@@ -138,6 +141,7 @@ export interface Course {
   /** Course category id — matches a CourseCategory.id in store.courseCategories.
    * Missing means "uncategorized" — shown in a fallback column on the Kanban. */
   category?: string
+  sessionLimit?: number
   /**
    * Set when this Course was built from a single long video rather than a
    * YouTube playlist. The "playlist" is synthetic — its sidebar entries are
@@ -164,6 +168,12 @@ export interface Channel {
   bucket: Bucket
   category: CategoryId
   addedAt: string
+  isPlaylistChannel?: boolean
+  playlistId?: string
+  playlistVideos?: PlaylistVideo[]
+  releasedVideoIds?: string[]
+  videosPerWeek?: number
+  isExplore?: boolean
 }
 
 export interface ChannelFresh {
@@ -186,6 +196,7 @@ export interface DailySessions {
   courseSessionsCompleted: number
   totalSessionsCompleted: number
   courseSessionsByCategory?: Record<string, number>
+  courseSessionsByCourse?: Record<string, number>
 }
 
 export interface GoogleAuth {
@@ -221,6 +232,7 @@ export interface PersistedStore {
   routineDoneByDay: Record<string, string[]>
   googleAuth: GoogleAuth
   youtubeApiKey: string
+  youtubeApiKeys?: string[]
   sundayLimit: number
   playlistVideosCache: Record<string, { videos: PlaylistVideo[]; fetchedAt: string }>
   youtubeSubscriptionsCache: { subs: YouTubeSubscription[]; fetchedAt: string } | null
@@ -232,6 +244,8 @@ export interface PersistedStore {
   sliceTargetMin: number
   /** Sunday total duration cap in minutes (mirrors weekday per-cat budgets). */
   sundayMinutes: number
+  /** Weekday total duration cap in minutes. */
+  weekdayMinutes: number
   /** Videos auto-detected as YouTube Shorts and pulled out of the loop. */
   shortsQuarantine: LoopItem[]
   /** reMarkable cloud pairing state + last fetched document tree. */
@@ -249,6 +263,8 @@ export interface PersistedStore {
   /** "Would like to watch eventually" — videos parked outside the daily
    * rotation. Promoted to loop with one click from the Wishlist screen. */
   wishlist: LoopItem[]
+  /** Videos selected for Today's plan that were not watched. Fallback pool. */
+  delayedLoop?: LoopItem[]
   /** Soft-deleted videos & courses. Auto-purged after 30 days; user can
    * restore or purge earlier from Settings → Trash. */
   trash?: TrashEntry[]
@@ -256,6 +272,27 @@ export interface PersistedStore {
   bookmarks?: Bookmark[]
   /** Per-course streak state — updated when a course part is marked done. */
   courseStreaks?: Record<string, CourseStreak>
+  /** Captured ideas. Grows unbounded; UI filters by createdDate/kind. */
+  sparks?: Spark[]
+  exploreTopics?: ExploreTopic[]
+  interests?: InterestItem[]
+  dailySynthesis?: Record<string, DailySynthesis>
+  geminiApiKey?: string
+  ollamaUrl?: string
+  ollamaModel?: string
+  feedMemoryProfile?: string
+  feedRatings?: FeedRating[]
+  dismissedFeedVideoIds?: string[]
+  appSuggestions?: string
+}
+
+export interface FeedRating {
+  videoId: string
+  title: string
+  creator: string
+  rating: 'love' | 'hate'
+  transcriptSnippet: string
+  timestamp: string
 }
 
 export interface TrashEntry {
@@ -360,7 +397,80 @@ export type GooglePollResult =
   | { status: 'denied' }
   | { status: 'error'; message: string }
 
-export type Screen = 'today' | 'player' | 'courses' | 'courseFocus' | 'routine' | 'settings' | 'notes' | 'wishlist' | 'entertainment' | 'noteStudy'
+export type Screen = 'today' | 'player' | 'courses' | 'courseFocus' | 'routine' | 'settings' | 'notes' | 'wishlist' | 'entertainment' | 'noteStudy' | 'sparks' | 'feed' | 'search'
+
+// ============ Sparks (ideation) ============
+// Data shape mirrors Ember's `brainState.ideas[]` schema so a future sync layer
+// only has to prefix-rewrite ids (`sprk_` ⇄ `idea-`). New fields go at the
+// bottom so older stores stay readable.
+
+export type SparkKind = 'problem' | 'idea' | 'question' | 'realization' | 'solution'
+
+export interface SparkKindMeta {
+  label: string
+  glyph: string
+  color: string
+  bg: string
+  text: string
+}
+
+export interface Spark {
+  /** `sprk_<epoch>_<rand>` — Ember uses `idea-<epoch>`, sync layer rewrites. */
+  id: string
+  /** One-sentence essence. Ember auto-shortens via AI; we keep user-typed. */
+  title: string
+  /** Free-form long-form text. Ember stores the raw user input here. */
+  description: string
+  kind: SparkKind | ''
+  /** Reuses H&C category ids. Ember's `sectionId` maps here through sync. */
+  category: CategoryId | ''
+  tags: string[]
+  /** ISO timestamp of capture. */
+  createdAt: string
+  /** YYYY-MM-DD, cheap to filter by day without reparsing. */
+  createdDate: string
+  /** VideoId being watched at capture-time (if any). */
+  sourceVideoId?: string
+  /** Ember lifecycle status. */
+  status?: 'seed' | 'sprouting' | 'mature'
+  /** Ember uses -1 for unset. Kept for future sync fidelity. */
+  confidence?: number
+  messageCount?: number
+  topOfMind?: boolean
+  /** Empty in H&C, non-empty when Ember sync attaches to a project. */
+  projectId?: string
+  /** Kept empty in H&C — Ember's cross-section grouping. */
+  sectionId?: string
+  notes?: string
+  topic?: string
+  starred?: boolean
+  srs?: { reps: number; ease: number; interval: number; dueAt: string }
+}
+
+
+export interface ExploreTopic {
+  id: string
+  text: string
+  addedAt: string
+  fetchCount?: number
+  oceanLastFetchedDate?: string
+  pitch?: string
+  pitchedAt?: string
+}
+
+export interface InterestItem {
+  id: string
+  name: string
+  addedAt: string
+  pareto?: string
+  paretoGeneratedAt?: string
+}
+
+export interface DailySynthesis {
+  text: string
+  generatedAt: string
+  sparkIds: string[]
+}
 
 declare global {
   interface Window {
@@ -389,14 +499,19 @@ declare global {
       rmPair: (code: string) => Promise<{ ok: true } | { ok: false; error: string }>
       rmUnpair: () => Promise<boolean>
       rmStatus: () => Promise<RmStatus>
-      rmListDocs: () => Promise<RmDoc[]>
+      rmListDocs: (forceRefresh?: boolean) => Promise<RmDoc[]>
       rmDocMeta: (uuid: string) => Promise<RmDoc | null>
       pickNoteFile: () => Promise<string | null>
       rmDiagnose: () => Promise<string>
+      openInBrowser: (url: string) => Promise<void>
       setApiKey: (key: string) => void
+      setApiKeys: (keys: string[]) => void
       windowMinimize: () => void
       windowMaximize: () => void
       windowClose: () => void
+      searchYoutubeVideos: (query: string) => Promise<ChannelRecentVideo[]>
+      callGeminiApi: (apiKey: string, model: string, prompt: string) => Promise<string>
+      callOllamaApi: (endpoint: string, model: string, prompt: string, formatJson: boolean) => Promise<string>
     }
   }
 }

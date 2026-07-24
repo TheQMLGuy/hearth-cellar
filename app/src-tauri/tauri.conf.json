@@ -29,7 +29,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-src https://www.youtube.com; connect-src 'self' https://www.googleapis.com https://*.youtube.com https://generativelanguage.googleapis.com https://oauth2.googleapis.com https://*.remarkable.com https://remarkable.engineering; img-src 'self' https: data:; media-src 'self' https:; font-src 'self' data:"
     }
   },
   "bundle": {

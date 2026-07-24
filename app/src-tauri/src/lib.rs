@@ -149,7 +149,8 @@ fn iso_duration_to_seconds(iso: &str) -> u64 {
 /// at least 3 timestamp lines are found AND the first is 0:00 (YouTube's own
 /// rule for auto-detecting chapters).
 fn parse_chapters_from_description(desc: &str) -> Vec<Chapter> {
-    let line_re = Regex::new(r"(?m)^\s*((?:\d{1,2}:)?\d{1,2}:\d{2})\s+(.+?)\s*$").unwrap();
+    static LINE_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let line_re = LINE_RE.get_or_init(|| Regex::new(r"(?m)^\s*((?:\d{1,2}:)?\d{1,2}:\d{2})\s+(.+?)\s*$").unwrap());
     let mut out: Vec<Chapter> = Vec::new();
     for cap in line_re.captures_iter(desc) {
         let ts = &cap[1];
@@ -307,6 +308,25 @@ fn unescape_json_text(s: &str) -> String {
     out
 }
 
+fn extract_json_string_value(s: &str, start_idx: usize) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut end_idx = None;
+    let mut escaped = false;
+    for i in start_idx..bytes.len() {
+        let c = bytes[i];
+        if escaped {
+            escaped = false;
+        } else if c == b'\\' {
+            escaped = true;
+        } else if c == b'"' {
+            end_idx = Some(i);
+            break;
+        }
+    }
+    let end = end_idx?;
+    Some(s[start_idx..end].to_string())
+}
+
 fn fetch_playlist_videos_impl(playlist_id: &str) -> Vec<PlaylistVideo> {
     let url = format!(
         "https://www.youtube.com/playlist?list={}",
@@ -322,10 +342,13 @@ fn fetch_playlist_videos_impl(playlist_id: &str) -> Vec<PlaylistVideo> {
         Err(_) => return Vec::new(),
     };
 
-    let re = Regex::new(
-        r#""playlistVideoRenderer":\{[^}]*?"videoId":"([A-Za-z0-9_-]{11})"[^}]*?"title":\{(?:"runs":\[\{"text":"((?:\\.|[^"\\])*)"|"simpleText":"((?:\\.|[^"\\])*)")"#,
-    )
-    .unwrap();
+    static PLAYLIST_VIDEO_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = PLAYLIST_VIDEO_RE.get_or_init(|| {
+        Regex::new(
+            r#""playlistVideoRenderer":\{[^}]*?"videoId":"([A-Za-z0-9_-]{11})"[^}]*?"title":\{(?:"runs":\[\{"text":"((?:\\.|[^"\\])*)"|"simpleText":"((?:\\.|[^"\\])*)")"#,
+        )
+        .unwrap()
+    });
 
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
@@ -341,6 +364,72 @@ fn fetch_playlist_videos_impl(playlist_id: &str) -> Vec<PlaylistVideo> {
         }
         out.push(PlaylistVideo { video_id: id, title, duration: String::new() });
     }
+
+    if out.is_empty() {
+        let mut last_idx = 0;
+        while let Some(start_offset) = body[last_idx..].find("\"lockupViewModel\":") {
+            let abs_start = last_idx + start_offset;
+            if let Some(brace_offset) = body[abs_start..].find('{') {
+                let brace_start = abs_start + brace_offset;
+                let mut depth = 0;
+                let mut end_idx = None;
+                let bytes = body.as_bytes();
+                let mut in_string = false;
+                let mut escaped = false;
+                for i in brace_start..bytes.len() {
+                    let c = bytes[i];
+                    if in_string {
+                        if escaped {
+                            escaped = false;
+                        } else if c == b'\\' {
+                            escaped = true;
+                        } else if c == b'"' {
+                            in_string = false;
+                        }
+                    } else {
+                        if c == b'"' {
+                            in_string = true;
+                        } else if c == b'{' {
+                            depth += 1;
+                        } else if c == b'}' {
+                            depth -= 1;
+                            if depth == 0 {
+                                end_idx = Some(i + 1);
+                                break;
+                            }
+                        }
+                    }
+                }
+                if let Some(end) = end_idx {
+                    let obj_str = &body[brace_start..end];
+                    if let (Some(id_start), Some(title_start)) = (obj_str.find("\"contentId\":\""), obj_str.find("\"title\":{\"content\":\"")) {
+                        let id_val_start = id_start + "\"contentId\":\"".len();
+                        let title_val_start = title_start + "\"title\":{\"content\":\"".len();
+                        if let (Some(raw_id), Some(raw_title)) = (
+                            extract_json_string_value(obj_str, id_val_start),
+                            extract_json_string_value(obj_str, title_val_start)
+                        ) {
+                            let id = unescape_json_text(&raw_id);
+                            let title = unescape_json_text(&raw_title);
+                            if !id.is_empty() && seen.insert(id.clone()) {
+                                out.push(PlaylistVideo {
+                                    video_id: id,
+                                    title,
+                                    duration: String::new(),
+                                });
+                            }
+                        }
+                    }
+                    last_idx = end;
+                } else {
+                    last_idx = brace_start + 1;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
     out
 }
 
@@ -351,22 +440,23 @@ fn normalize_handle(input: &str) -> String {
 }
 
 fn extract_channel_id(body: &str) -> Option<String> {
-    // Try several patterns YouTube uses across page variants.
-    let patterns = [
-        r#"<meta\s+itemprop="(?:identifier|channelId)"\s+content="(UC[A-Za-z0-9_-]{22})""#,
-        r#"<link\s+rel="canonical"\s+href="https?://www\.youtube\.com/channel/(UC[A-Za-z0-9_-]{22})""#,
-        r#"feeds/videos\.xml\?channel_id=(UC[A-Za-z0-9_-]{22})"#,
-        r#""channelId":"(UC[A-Za-z0-9_-]{22})""#,
-        r#""externalId":"(UC[A-Za-z0-9_-]{22})""#,
-        r#""browseId":"(UC[A-Za-z0-9_-]{22})""#,
-        r#"/channel/(UC[A-Za-z0-9_-]{22})"#,
-    ];
-    for p in patterns {
-        if let Ok(re) = Regex::new(p) {
-            if let Some(c) = re.captures(body) {
-                if let Some(m) = c.get(1) {
-                    return Some(m.as_str().to_string());
-                }
+    static RE_PATTERNS: std::sync::OnceLock<Vec<Regex>> = std::sync::OnceLock::new();
+    let res = RE_PATTERNS.get_or_init(|| {
+        let patterns = [
+            r#"<meta\s+itemprop="(?:identifier|channelId)"\s+content="(UC[A-Za-z0-9_-]{22})""#,
+            r#"<link\s+rel="canonical"\s+href="https?://www\.youtube\.com/channel/(UC[A-Za-z0-9_-]{22})""#,
+            r#"feeds/videos\.xml\?channel_id=(UC[A-Za-z0-9_-]{22})"#,
+            r#""channelId":"(UC[A-Za-z0-9_-]{22})""#,
+            r#""externalId":"(UC[A-Za-z0-9_-]{22})""#,
+            r#""browseId":"(UC[A-Za-z0-9_-]{22})""#,
+            r#"/channel/(UC[A-Za-z0-9_-]{22})"#,
+        ];
+        patterns.iter().map(|p| Regex::new(p).unwrap()).collect()
+    });
+    for re in res {
+        if let Some(c) = re.captures(body) {
+            if let Some(m) = c.get(1) {
+                return Some(m.as_str().to_string());
             }
         }
     }
@@ -374,24 +464,26 @@ fn extract_channel_id(body: &str) -> Option<String> {
 }
 
 fn extract_channel_name(body: &str) -> Option<String> {
-    let patterns = [
-        (r#"<meta\s+property="og:title"\s+content="([^"]+)""#, false),
-        (r#"<meta\s+name="title"\s+content="([^"]+)""#, false),
-        (r#""title":"([^"]+)","navigationEndpoint""#, true),
-        (r#""channelMetadataRenderer":\{"title":"([^"]+)""#, true),
-        (r#""ownerChannelName":"([^"]+)""#, true),
-        (r#"<title>([^<]+?)\s*-\s*YouTube</title>"#, false),
-    ];
-    for (p, json_escape) in patterns {
-        if let Ok(re) = Regex::new(p) {
-            if let Some(c) = re.captures(body) {
-                if let Some(m) = c.get(1) {
-                    let s = m.as_str();
-                    if s.is_empty() {
-                        continue;
-                    }
-                    return Some(if json_escape { unescape_json_text(s) } else { s.to_string() });
+    static RE_PATTERNS: std::sync::OnceLock<Vec<(Regex, bool)>> = std::sync::OnceLock::new();
+    let res = RE_PATTERNS.get_or_init(|| {
+        let patterns = [
+            (r#"<meta\s+property="og:title"\s+content="([^"]+)""#, false),
+            (r#"<meta\s+name="title"\s+content="([^"]+)""#, false),
+            (r#""title":"([^"]+)","navigationEndpoint""#, true),
+            (r#""channelMetadataRenderer":\{"title":"([^"]+)""#, true),
+            (r#""ownerChannelName":"([^"]+)""#, true),
+            (r#"<title>([^<]+?)\s*-\s*YouTube</title>"#, false),
+        ];
+        patterns.iter().map(|(p, esc)| (Regex::new(p).unwrap(), *esc)).collect()
+    });
+    for (re, json_escape) in res {
+        if let Some(c) = re.captures(body) {
+            if let Some(m) = c.get(1) {
+                let s = m.as_str();
+                if s.is_empty() {
+                    continue;
                 }
+                return Some(if *json_escape { unescape_json_text(s) } else { s.to_string() });
             }
         }
     }
@@ -472,11 +564,13 @@ fn fetch_channel_latest_impl(channel_id: &str) -> Option<ChannelLatest> {
         .into_string()
         .ok()?;
 
-    // RSS XML: <entry><yt:videoId>ID</yt:videoId><title>Title</title><published>ISO</published>
-    let entry_re = Regex::new(
-        r#"<entry>[\s\S]*?<yt:videoId>([A-Za-z0-9_-]{11})</yt:videoId>[\s\S]*?<title>([^<]+)</title>[\s\S]*?<published>([^<]+)</published>"#,
-    )
-    .ok()?;
+    static ENTRY_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let entry_re = ENTRY_RE.get_or_init(|| {
+        Regex::new(
+            r#"<entry>[\s\S]*?<yt:videoId>([A-Za-z0-9_-]{11})</yt:videoId>[\s\S]*?<title>([^<]+)</title>[\s\S]*?<published>([^<]+)</published>"#,
+        )
+        .unwrap()
+    });
     // Walk entries in order (newest first per RSS spec) and skip Shorts by
     // title hashtag. RSS has no duration to check against.
     for caps in entry_re.captures_iter(&body) {
@@ -494,6 +588,13 @@ fn fetch_channel_latest_impl(channel_id: &str) -> Option<ChannelLatest> {
 
 fn store_file_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     use tauri::Manager;
+    
+    // Attempt to use user's Dropbox folder
+    let dropbox_dir = std::path::PathBuf::from(r"C:\Users\dtmat\Dropbox\Hearth & Cellar");
+    if dropbox_dir.exists() || std::fs::create_dir_all(&dropbox_dir).is_ok() {
+        return Some(dropbox_dir.join("config.json"));
+    }
+    
     let dir = app.path().app_data_dir().ok()?;
     let _ = std::fs::create_dir_all(&dir);
     Some(dir.join("config.json"))
@@ -675,49 +776,72 @@ fn fetch_playlist_meta_api(playlist_id: &str, api_key: &str) -> Option<FetchedMe
     })
 }
 
-/// Last-ditch duration source. Fetches the watch page and tries several
-/// regex patterns over the embedded player config. The `CONSENT=YES+1`
-/// cookie + `hl=en&gl=US` query params dodge YouTube's consent gate which
-/// otherwise serves a stub page with no `lengthSeconds`.
-fn scrape_watch_page_length_secs(video_id: &str) -> Option<u64> {
+struct ScrapedWatchMeta {
+    duration_sec: u64,
+    description: String,
+}
+
+/// Scrape the YouTube watch page for metadata without burning API quota.
+/// Extracts duration from `lengthSeconds` / `approxDurationMs` and the video
+/// description from `shortDescription` in the embedded player config JSON.
+/// The `CONSENT=YES+1` cookie + `hl=en&gl=US` params dodge YouTube's consent
+/// gate which otherwise serves a stub page with no player data.
+fn scrape_watch_page(video_id: &str) -> Option<ScrapedWatchMeta> {
     let url = format!("https://www.youtube.com/watch?v={}&hl=en&gl=US", video_id);
     let resp = ureq::get(&url)
         .set("User-Agent", ua())
         .set("Accept-Language", "en-US,en;q=0.9")
         .set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
         .set("Cookie", "CONSENT=YES+1; SOCS=CAI")
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(8))
         .call()
         .ok()?;
     let body = resp.into_string().ok()?;
-    // Pattern attempts, in order of YouTube's recent format rotation history.
-    let patterns: &[&str] = &[
-        r#""lengthSeconds"\s*:\s*"(\d+)""#,
-        r#""lengthSeconds"\s*:\s*(\d+)"#,
-        r#"\\"lengthSeconds\\"\s*:\s*\\"(\d+)\\""#,
-    ];
-    for pat in patterns {
-        if let Ok(re) = Regex::new(pat) {
-            if let Some(cap) = re.captures(&body) {
-                if let Some(m) = cap.get(1) {
-                    if let Ok(n) = m.as_str().parse::<u64>() {
-                        if n > 0 { return Some(n); }
-                    }
+
+    // --- Duration extraction ---
+    let mut duration_sec: u64 = 0;
+    static DURATION_RES: std::sync::OnceLock<Vec<Regex>> = std::sync::OnceLock::new();
+    let duration_res = DURATION_RES.get_or_init(|| {
+        let patterns: &[&str] = &[
+            r#""lengthSeconds"\s*:\s*"(\d+)""#,
+            r#""lengthSeconds"\s*:\s*(\d+)"#,
+            r#"\\"lengthSeconds\\"\s*:\s*\\"(\d+)\\""#,
+        ];
+        patterns.iter().map(|pat| Regex::new(pat).unwrap()).collect()
+    });
+    for re in duration_res {
+        if let Some(cap) = re.captures(&body) {
+            if let Some(m) = cap.get(1) {
+                if let Ok(n) = m.as_str().parse::<u64>() {
+                    if n > 0 { duration_sec = n; break; }
                 }
             }
         }
     }
-    // Last-ditch: approxDurationMs (in milliseconds). Lives in streamingData.
-    if let Ok(re) = Regex::new(r#""approxDurationMs"\s*:\s*"(\d+)""#) {
+    if duration_sec == 0 {
+        // Last-ditch: approxDurationMs (in milliseconds). Lives in streamingData.
+        static APPROX_DUR_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+        let re = APPROX_DUR_RE.get_or_init(|| Regex::new(r#""approxDurationMs"\s*:\s*"(\d+)""#).unwrap());
         if let Some(cap) = re.captures(&body) {
             if let Some(m) = cap.get(1) {
                 if let Ok(ms) = m.as_str().parse::<u64>() {
-                    if ms >= 1000 { return Some(ms / 1000); }
+                    if ms >= 1000 { duration_sec = ms / 1000; }
                 }
             }
         }
     }
-    None
+
+    // --- Description extraction (for chapter parsing) ---
+    let mut description = String::new();
+    static SHORT_DESC_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = SHORT_DESC_RE.get_or_init(|| Regex::new(r#""shortDescription"\s*:\s*"((?:\\.|[^"\\])*)""#).unwrap());
+    if let Some(cap) = re.captures(&body) {
+        if let Some(m) = cap.get(1) {
+            description = unescape_json_text(m.as_str());
+        }
+    }
+
+    Some(ScrapedWatchMeta { duration_sec, description })
 }
 
 fn secs_to_label(secs: u64) -> String {
@@ -734,30 +858,46 @@ fn fetch_youtube_meta(video_id: String, api_key: Option<String>) -> Option<Fetch
     if !is_video_id(&video_id) {
         return None;
     }
-    // Try the Data API first (gets title + author + duration + chapters). Even
-    // when the API succeeds it can come back with duration_sec=0 — e.g. when
-    // the user's key has no quota left for contentDetails, or the video is in
-    // a state where YouTube returns snippet but not duration. So we hold any
-    // API result aside and only return early if duration is already filled.
-    let from_api = api_key
+    // Scrape-first: try free sources before touching the quota-limited Data API.
+
+    // 1. Watch-page scrape (free) — duration + description (for chapter parsing)
+    let scraped = scrape_watch_page(&video_id);
+
+    // 2. oEmbed (free, no API key needed) — title, author, thumbnail
+    if let Some(mut meta) = fetch_oembed(&format!("https://www.youtube.com/watch?v={}", video_id)) {
+        // Enrich oEmbed result with scraped data
+        if let Some(ref wp) = scraped {
+            if wp.duration_sec > 0 {
+                meta.duration_sec = wp.duration_sec;
+                meta.duration = secs_to_label(wp.duration_sec);
+            }
+            if !wp.description.is_empty() {
+                meta.description = wp.description.clone();
+                meta.chapters = parse_chapters_from_description(&wp.description);
+            }
+        }
+        return Some(meta);
+    }
+
+    // 3. oEmbed failed — fall back to Data API as last resort
+    if let Some(mut meta) = api_key
         .as_ref()
         .filter(|k| !k.is_empty())
-        .and_then(|k| fetch_video_meta_api(&video_id, k));
-
-    let mut meta = match from_api {
-        Some(m) => m,
-        None => fetch_oembed(&format!("https://www.youtube.com/watch?v={}", video_id))?,
-    };
-
-    // Always backfill duration via scrape if it's still missing — regardless
-    // of whether API or oEmbed was the source.
-    if meta.duration_sec == 0 {
-        if let Some(secs) = scrape_watch_page_length_secs(&video_id) {
-            meta.duration_sec = secs;
-            meta.duration = secs_to_label(secs);
+        .and_then(|k| fetch_video_meta_api(&video_id, k))
+    {
+        // Backfill duration from scrape if API returned 0
+        if meta.duration_sec == 0 {
+            if let Some(ref wp) = scraped {
+                if wp.duration_sec > 0 {
+                    meta.duration_sec = wp.duration_sec;
+                    meta.duration = secs_to_label(wp.duration_sec);
+                }
+            }
         }
+        return Some(meta);
     }
-    Some(meta)
+
+    None
 }
 
 #[derive(Debug, Serialize)]
@@ -810,10 +950,8 @@ fn fetch_youtube_transcript(video_id: String) -> Vec<TranscriptCue> {
 fn parse_timedtext_xml(body: &str) -> Vec<TranscriptCue> {
     let mut cues = Vec::new();
     // Match each <text ...>...</text> with start attr and inner content.
-    let re = match Regex::new(r#"(?s)<text[^>]*\bstart="([0-9.]+)"[^>]*>(.*?)</text>"#) {
-        Ok(r) => r,
-        Err(_) => return cues,
-    };
+    static CUE_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = CUE_RE.get_or_init(|| Regex::new(r#"(?s)<text[^>]*\bstart="([0-9.]+)"[^>]*>(.*?)</text>"#).unwrap());
     for cap in re.captures_iter(body) {
         let start: f64 = cap.get(1).and_then(|m| m.as_str().parse().ok()).unwrap_or(-1.0);
         if start < 0.0 { continue; }
@@ -840,17 +978,20 @@ fn fetch_youtube_playlist_meta(playlist_id: String, api_key: Option<String>) -> 
     if !is_playlist_id(&playlist_id) {
         return None;
     }
-    if let Some(ref key) = api_key {
-        if !key.is_empty() {
-            if let Some(meta) = fetch_playlist_meta_api(&playlist_id, key) {
-                return Some(meta);
-            }
-        }
-    }
-    fetch_oembed(&format!(
+    // Scrape-first: oEmbed is free and gives title + author + thumbnail
+    if let Some(meta) = fetch_oembed(&format!(
         "https://www.youtube.com/playlist?list={}",
         playlist_id
-    ))
+    )) {
+        return Some(meta);
+    }
+    // Fallback to Data API only if oEmbed failed
+    if let Some(ref key) = api_key {
+        if !key.is_empty() {
+            return fetch_playlist_meta_api(&playlist_id, key);
+        }
+    }
+    None
 }
 
 #[tauri::command]
@@ -858,6 +999,12 @@ fn fetch_youtube_playlist_videos(playlist_id: String, api_key: Option<String>) -
     if !is_playlist_id(&playlist_id) {
         return Vec::new();
     }
+    // Scrape-first: page scrape is free and gets video IDs + titles
+    let scraped = fetch_playlist_videos_impl(&playlist_id);
+    if !scraped.is_empty() {
+        return scraped;
+    }
+    // Fallback to Data API (handles private/unlisted playlists that block scraping)
     if let Some(ref key) = api_key {
         if !key.is_empty() {
             if let Some(videos) = fetch_playlist_videos_api(&playlist_id, key) {
@@ -865,7 +1012,7 @@ fn fetch_youtube_playlist_videos(playlist_id: String, api_key: Option<String>) -
             }
         }
     }
-    fetch_playlist_videos_impl(&playlist_id)
+    Vec::new()
 }
 
 fn resolve_channel_api(handle: &str, api_key: &str) -> Option<ChannelLookup> {
@@ -940,7 +1087,7 @@ fn fetch_channel_latest_api(channel_id: &str, api_key: &str) -> Option<ChannelLa
     if candidates.is_empty() {
         return None;
     }
-    // Duration check: drop anything ≤ 65s
+    // Duration check: drop anything ≤ 180s (CON-0005)
     let ids: Vec<String> = candidates.iter().map(|c| c.0.clone()).collect();
     let mut shorts: std::collections::HashSet<String> = std::collections::HashSet::new();
     let joined = ids.join(",");
@@ -958,7 +1105,7 @@ fn fetch_channel_latest_api(channel_id: &str, api_key: &str) -> Option<ChannelLa
                         .and_then(|cd| cd.duration)
                         .and_then(|d| iso_duration_seconds(&d))
                         .unwrap_or(u64::MAX);
-                    if secs <= 65 { shorts.insert(id); }
+                    if secs <= 180 { shorts.insert(id); }
                 }
             }
         }
@@ -986,14 +1133,17 @@ struct YtSearchId {
 
 #[tauri::command]
 fn resolve_channel(handle: String, api_key: Option<String>) -> Option<ChannelLookup> {
+    // Scrape-first: HTML scrape is free and works for @handles and channel IDs
+    if let Some(lookup) = resolve_channel_impl(&handle) {
+        return Some(lookup);
+    }
+    // Fallback to Data API only if scraping failed
     if let Some(ref key) = api_key {
         if !key.is_empty() {
-            if let Some(lookup) = resolve_channel_api(&handle, key) {
-                return Some(lookup);
-            }
+            return resolve_channel_api(&handle, key);
         }
     }
-    resolve_channel_impl(&handle)
+    None
 }
 
 #[derive(Debug, Serialize)]
@@ -1007,7 +1157,7 @@ pub struct ChannelRecentVideo {
 
 /// A YouTube video is treated as a "Short" if:
 ///   - its title contains the #shorts hashtag (case-insensitive), OR
-///   - its duration is ≤ 65 seconds (covers classic 60s shorts).
+///   - its duration is ≤ 180 seconds (covers classic and newer 3m shorts) (CON-0005).
 fn title_is_short(title: &str) -> bool {
     let lower = title.to_lowercase();
     lower.contains("#shorts") || lower.contains("#short ") || lower.ends_with("#short")
@@ -1089,7 +1239,7 @@ fn fetch_channel_recent_api(channel_id: &str, since_iso: &str, api_key: &str) ->
                             .and_then(|cd| cd.duration)
                             .and_then(|d| iso_duration_seconds(&d))
                             .unwrap_or(u64::MAX);
-                        if secs <= 65 {
+                        if secs <= 180 { // CON-0005
                             shorts.insert(id);
                         }
                     }
@@ -1114,11 +1264,13 @@ fn fetch_channel_recent_rss(channel_id: &str, since_iso: &str) -> Vec<ChannelRec
         Ok(r) => match r.into_string() { Ok(s) => s, Err(_) => return Vec::new() },
         Err(_) => return Vec::new(),
     };
-    let re = Regex::new(
-        r#"<entry>[\s\S]*?<yt:videoId>([A-Za-z0-9_-]{11})</yt:videoId>[\s\S]*?<title>([^<]+)</title>[\s\S]*?<published>([^<]+)</published>"#,
-    )
-    .ok();
-    let re = match re { Some(r) => r, None => return Vec::new() };
+    static RSS_ENTRY_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = RSS_ENTRY_RE.get_or_init(|| {
+        Regex::new(
+            r#"<entry>[\s\S]*?<yt:videoId>([A-Za-z0-9_-]{11})</yt:videoId>[\s\S]*?<title>([^<]+)</title>[\s\S]*?<published>([^<]+)</published>"#,
+        )
+        .unwrap()
+    });
     let mut out = Vec::new();
     let since_ts = parse_iso_ts(since_iso);
     for caps in re.captures_iter(&body) {
@@ -1171,6 +1323,12 @@ fn parse_iso_ts(s: &str) -> Option<i64> {
 
 #[tauri::command]
 fn fetch_channel_recent(channel_id: String, since_iso: String, api_key: Option<String>) -> Vec<ChannelRecentVideo> {
+    // Scrape-first: RSS feed is free (saves 100 quota units vs search.list)
+    let from_rss = fetch_channel_recent_rss(&channel_id, &since_iso);
+    if !from_rss.is_empty() {
+        return from_rss;
+    }
+    // Fallback to Data API (better Shorts filtering via duration check)
     if let Some(ref key) = api_key {
         if !key.is_empty() {
             if let Some(list) = fetch_channel_recent_api(&channel_id, &since_iso, key) {
@@ -1178,19 +1336,149 @@ fn fetch_channel_recent(channel_id: String, since_iso: String, api_key: Option<S
             }
         }
     }
-    fetch_channel_recent_rss(&channel_id, &since_iso)
+    Vec::new()
 }
 
 #[tauri::command]
 fn fetch_channel_latest(channel_id: String, api_key: Option<String>) -> Option<ChannelLatest> {
+    // Scrape-first: RSS feed is free (saves 100 quota units vs search.list)
+    if let Some(latest) = fetch_channel_latest_impl(&channel_id) {
+        return Some(latest);
+    }
+    // Fallback to Data API (better Shorts filtering via duration check)
     if let Some(ref key) = api_key {
         if !key.is_empty() {
-            if let Some(latest) = fetch_channel_latest_api(&channel_id, key) {
-                return Some(latest);
-            }
+            return fetch_channel_latest_api(&channel_id, key);
         }
     }
-    fetch_channel_latest_impl(&channel_id)
+    None
+}
+
+#[tauri::command]
+fn search_youtube_videos_api(query: String, api_key: String) -> Result<Vec<ChannelRecentVideo>, String> {
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let url = format!(
+        "https://www.googleapis.com/youtube/v3/search?part=snippet&q={}&maxResults=15&type=video&key={}",
+        url_encode_simple(&query),
+        url_encode_simple(&api_key)
+    );
+    let resp = match ureq::get(&url).timeout(std::time::Duration::from_secs(10)).call() {
+        Ok(r) => r,
+        Err(e) => return Err(format!("YouTube search API error: {}", e)),
+    };
+    let parsed: YtApiResponse<YtSearchItem> = match resp.into_json() {
+        Ok(p) => p,
+        Err(e) => return Err(format!("JSON parsing error: {}", e)),
+    };
+    let items = parsed.items.unwrap_or_default();
+    let mut results = Vec::new();
+    for item in items {
+        let video_id = match item.id.and_then(|i| i.video_id) {
+            Some(v) => v, None => continue,
+        };
+        let snip = match item.snippet { Some(s) => s, None => continue };
+        results.push(ChannelRecentVideo {
+            video_id,
+            title: snip.title.unwrap_or_default(),
+            published_at: snip.published_at.unwrap_or_default(),
+        });
+    }
+    Ok(results)
+}
+
+#[tauri::command]
+fn call_gemini_api(api_key: String, model: String, prompt: String) -> Result<String, String> {
+    let active_model = if model.trim().is_empty() {
+        "gemini-2.5-flash"
+    } else {
+        model.trim()
+    };
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+        active_model,
+        api_key
+    );
+    let body = serde_json::json!({
+        "contents": [{
+            "parts": [{"text": prompt}]
+        }],
+        "generationConfig": {
+            "responseMimeType": "application/json"
+        }
+    });
+    let resp = match ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(15))
+        .send_json(body)
+    {
+        Ok(r) => r,
+        Err(e) => return Err(format!("Gemini API request failed: {}", e)),
+    };
+    let text = match resp.into_string() {
+        Ok(t) => t,
+        Err(e) => return Err(format!("Failed to read response body: {}", e)),
+    };
+    Ok(text)
+}
+
+fn is_ollama_safe_host(endpoint: &str) -> bool {
+    // Ollama is a local service — restrict to loopback / localhost only.
+    if let Some(rest) = endpoint.strip_prefix("http://") {
+        rest.starts_with("localhost") || rest.starts_with("127.") || rest.starts_with("::1") || rest.starts_with("[::1]")
+    } else if let Some(rest) = endpoint.strip_prefix("https://") {
+        rest.starts_with("localhost") || rest.starts_with("127.") || rest.starts_with("::1") || rest.starts_with("[::1]")
+    } else {
+        false
+    }
+}
+
+#[tauri::command]
+fn call_ollama_api(endpoint: String, model: String, prompt: String, format_json: bool) -> Result<String, String> {
+    let mut clean_endpoint = endpoint.trim().to_string();
+    if !clean_endpoint.starts_with("http://") && !clean_endpoint.starts_with("https://") {
+        clean_endpoint = format!("http://{}", clean_endpoint);
+    }
+    if !is_ollama_safe_host(&clean_endpoint) {
+        return Err("Ollama endpoint must be a localhost address (127.0.0.1 or localhost)".to_string());
+    }
+    if clean_endpoint.ends_with('/') {
+        clean_endpoint.pop();
+    }
+    if clean_endpoint.ends_with("/api/chat") {
+        clean_endpoint = clean_endpoint.replace("/api/chat", "");
+    }
+    if clean_endpoint.ends_with('/') {
+        clean_endpoint.pop();
+    }
+    let url = format!("{}/api/chat", clean_endpoint);
+    let mut body_map = serde_json::Map::new();
+    body_map.insert("model".to_string(), serde_json::json!(model));
+    body_map.insert("messages".to_string(), serde_json::json!([
+        {
+            "role": "user",
+            "content": prompt
+        }
+    ]));
+    body_map.insert("stream".to_string(), serde_json::json!(false));
+    if format_json {
+        body_map.insert("format".to_string(), serde_json::json!("json"));
+    }
+    let body = serde_json::Value::Object(body_map);
+    let resp = match ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(60))
+        .send_json(body)
+    {
+        Ok(r) => r,
+        Err(e) => return Err(format!("Ollama API request failed: {}", e)),
+    };
+    let text = match resp.into_string() {
+        Ok(t) => t,
+        Err(e) => return Err(format!("Failed to read response body: {}", e)),
+    };
+    Ok(text)
 }
 
 // ============ Google OAuth (device-code flow) + YouTube subscriptions ============
@@ -1464,6 +1752,19 @@ fn is_playlist_id(s: &str) -> bool {
     s.len() >= 13 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+#[tauri::command]
+fn open_in_browser(url: String) {
+    static BROWSER_URL_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = BROWSER_URL_RE.get_or_init(|| Regex::new(r"^https?://[a-zA-Z0-9\-._~%!$&'()*+,;=:@/?#]+$").unwrap());
+    if !re.is_match(&url) {
+        return;
+    }
+    // On Windows, explorer.exe can open URLs safely without spawning cmd.exe shell interpreter.
+    let _ = std::process::Command::new("explorer")
+        .arg(&url)
+        .spawn();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1488,11 +1789,15 @@ pub fn run() {
             resolve_channel,
             fetch_channel_latest,
             fetch_channel_recent,
+            search_youtube_videos_api,
+            call_gemini_api,
+            call_ollama_api,
             google_start_device_flow,
             google_poll_token,
             google_refresh_token,
             youtube_list_subscriptions,
             pick_note_file,
+            open_in_browser,
             remarkable::rm_pair,
             remarkable::rm_unpair,
             remarkable::rm_status,
@@ -1503,3 +1808,80 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_iso_duration_to_seconds() {
+        assert_eq!(iso_duration_to_seconds("PT1H30M15S"), 5415);
+        assert_eq!(iso_duration_to_seconds("PT5M12S"), 312);
+        assert_eq!(iso_duration_to_seconds("PT45S"), 45);
+        assert_eq!(iso_duration_to_seconds("INVALID"), 0);
+    }
+
+    #[test]
+    fn test_iso_duration_to_label() {
+        assert_eq!(iso_duration_to_label("PT1H30M15S"), "1:30:15");
+        assert_eq!(iso_duration_to_label("PT5M12S"), "5:12");
+        assert_eq!(iso_duration_to_label("PT45S"), "0:45");
+        assert_eq!(iso_duration_to_label("INVALID"), "");
+    }
+
+    #[test]
+    fn test_parse_timestamp() {
+        assert_eq!(parse_timestamp("0:00"), 0);
+        assert_eq!(parse_timestamp("5:12"), 312);
+        assert_eq!(parse_timestamp("1:30:15"), 5415);
+    }
+
+    #[test]
+    fn test_title_is_short() {
+        assert!(title_is_short("Funny cat video #shorts"));
+        assert!(title_is_short("Funny cat video #short "));
+        assert!(!title_is_short("Funny cat video"));
+    }
+
+    #[test]
+    fn test_unescape_json_text() {
+        assert_eq!(unescape_json_text("hello\\nworld"), "hello\nworld");
+        assert_eq!(unescape_json_text("hello\\\"world"), "hello\"world");
+        assert_eq!(unescape_json_text("hello\\u0020world"), "hello world");
+    }
+
+    #[test]
+    fn test_parse_chapters_from_description() {
+        let desc = "0:00 Introduction\n2:30 First Part\n5:45 Conclusion\n";
+        let chapters = parse_chapters_from_description(desc);
+        assert_eq!(chapters.len(), 3);
+        assert_eq!(chapters[0].title, "Introduction");
+        assert_eq!(chapters[0].start_sec, 0);
+        assert_eq!(chapters[1].title, "First Part");
+        assert_eq!(chapters[1].start_sec, 150);
+        assert_eq!(chapters[2].title, "Conclusion");
+        assert_eq!(chapters[2].start_sec, 345);
+    }
+
+    #[test]
+    fn test_parse_timedtext_xml() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8" ?><transcript><text start="3.5" dur="2.0">Hello &amp; welcome</text><text start="5.7">To the show</text></transcript>"#;
+        let cues = parse_timedtext_xml(xml);
+        assert_eq!(cues.len(), 2);
+        assert_eq!(cues[0].start_sec, 3.5);
+        assert_eq!(cues[0].text, "Hello & welcome");
+        assert_eq!(cues[1].start_sec, 5.7);
+        assert_eq!(cues[1].text, "To the show");
+    }
+
+    #[test]
+    fn test_fetch_playlist_videos_lockup() {
+        let videos = fetch_playlist_videos_impl("UUz-RZblnhjXK_krP1jDybeQ");
+        assert!(!videos.is_empty(), "Videos list should not be empty!");
+        for v in &videos {
+            assert!(!v.video_id.is_empty(), "Video ID should not be empty");
+            assert!(!v.title.is_empty(), "Title should not be empty");
+        }
+    }
+}
+

@@ -150,6 +150,7 @@ export async function loadStore(): Promise<PersistedStore> {
       routineDoneByDay: raw.routineDoneByDay ?? {},
       googleAuth: raw.googleAuth ?? DEFAULT_GOOGLE,
       youtubeApiKey: raw.youtubeApiKey ?? '',
+      youtubeApiKeys: raw.youtubeApiKeys ?? (raw.youtubeApiKey ? [raw.youtubeApiKey] : []),
       sundayLimit: raw.sundayLimit ?? 5,
       playlistVideosCache: raw.playlistVideosCache ?? {},
       youtubeSubscriptionsCache: raw.youtubeSubscriptionsCache ?? null,
@@ -158,6 +159,7 @@ export async function loadStore(): Promise<PersistedStore> {
       progress: raw.progress ?? {},
       sliceTargetMin: raw.sliceTargetMin ?? DEFAULT_SLICE_TARGET_MIN,
       sundayMinutes: raw.sundayMinutes ?? DEFAULT_SUNDAY_MINUTES,
+      weekdayMinutes: (raw as any).weekdayMinutes ?? 60,
       shortsQuarantine,
       remarkable: raw.remarkable ?? { paired: false },
       done: raw.done ?? { weekStart: weekStartIso(), items: [] },
@@ -165,7 +167,8 @@ export async function loadStore(): Promise<PersistedStore> {
       playlistNotes: raw.playlistNotes ?? {},
       courseCategories,
       activeCourseByCategory,
-      wishlist: migratedWishlist
+      wishlist: migratedWishlist,
+      delayedLoop: raw.delayedLoop ?? []
     }
     await window.hearth.setStore(migrated)
     return migrated
@@ -173,9 +176,14 @@ export async function loadStore(): Promise<PersistedStore> {
   // Already at current schema — still backfill any optional fields that were
   // added without a version bump (defensive, no-op for fully-up-to-date stores).
   const s = raw as PersistedStore
+  if (s.dailySessions && !s.dailySessions.courseSessionsByCourse) {
+    s.dailySessions.courseSessionsByCourse = {}
+  }
   if (!s.progress) s.progress = {}
   if (s.sliceTargetMin === undefined) s.sliceTargetMin = DEFAULT_SLICE_TARGET_MIN
   if (s.sundayMinutes === undefined) s.sundayMinutes = DEFAULT_SUNDAY_MINUTES
+  if (s.weekdayMinutes === undefined) s.weekdayMinutes = 60
+  if (!s.youtubeApiKeys) s.youtubeApiKeys = s.youtubeApiKey ? [s.youtubeApiKey] : []
   if (!s.shortsQuarantine) s.shortsQuarantine = []
   if (!s.remarkable) s.remarkable = { paired: false }
   if (!s.done) s.done = { weekStart: weekStartIso(), items: [] }
@@ -187,9 +195,17 @@ export async function loadStore(): Promise<PersistedStore> {
     s.activeCourseByCategory = acbc
   }
   if (!s.wishlist) s.wishlist = []
+  if (!s.delayedLoop) s.delayedLoop = []
   if (!s.trash) s.trash = []
   if (!s.bookmarks) s.bookmarks = []
   if (!s.courseStreaks) s.courseStreaks = {}
+  if (!s.sparks) s.sparks = []
+  if (s.geminiApiKey === undefined) s.geminiApiKey = ''
+  if (s.ollamaUrl === undefined) s.ollamaUrl = 'http://localhost:11434'
+  if (s.ollamaModel === undefined) s.ollamaModel = 'gemma4:e2b'
+  if (s.feedMemoryProfile === undefined) s.feedMemoryProfile = 'The user\'s preferences are not yet known.'
+  if (!s.feedRatings) s.feedRatings = []
+  if (!s.dismissedFeedVideoIds) s.dismissedFeedVideoIds = []
   // Auto-purge trash entries older than 30 days.
   if (s.trash && s.trash.length > 0) {
     const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000
@@ -267,4 +283,30 @@ export function weekStartIso(now: Date = new Date()): string {
 
 export async function saveStore(next: PersistedStore): Promise<void> {
   await window.hearth.setStore(next)
+}
+
+/**
+ * Every videoId the user has ALREADY seen or explicitly parked — used by the
+ * channel refresh + ingest paths to avoid re-adding a video that lives in any
+ * of the bookkeeping buckets. Kept in one place so a new bucket only needs one
+ * line here to be respected everywhere.
+ *
+ *   - loop            : currently in daily rotation
+ *   - done.items      : watched or skipped this week
+ *   - wishlist        : parked for later (would come back if we ignored it)
+ *   - trash           : soft-deleted (still restorable for 30 days)
+ *   - shortsQuarantine: flagged Shorts awaiting review
+ */
+export function knownVideoIds(s: PersistedStore): Set<string> {
+  const out = new Set<string>()
+  for (const it of s.loop) out.add(it.videoId)
+  for (const it of s.delayedLoop ?? []) out.add(it.videoId)
+  for (const it of s.done?.items ?? []) out.add(it.videoId)
+  for (const it of s.wishlist ?? []) out.add(it.videoId)
+  for (const t of s.trash ?? []) {
+    const vid = t.video?.videoId
+    if (vid) out.add(vid)
+  }
+  for (const it of s.shortsQuarantine ?? []) out.add(it.videoId)
+  return out
 }

@@ -15,7 +15,7 @@ interface Props {
 }
 
 type FetchState = 'idle' | 'loading' | 'ok' | 'fail'
-type SaveAs = 'loop' | 'routine' | 'wishlist'
+type SaveAs = 'course' | 'loop' | 'routine' | 'wishlist'
 
 export function IngestPanel({
   currentMode,
@@ -41,7 +41,7 @@ export function IngestPanel({
   const lastFetchedKey = useRef<string | null>(null)
 
   const isShortUrl = /\/shorts\//i.test(url)
-  const isShortByDuration = durationSec > 0 && durationSec <= 60
+  const isShortByDuration = durationSec > 0 && durationSec <= 180 // CON-0005: 3-minute Shorts threshold
   const isShort = isShortUrl || isShortByDuration
 
   useEffect(() => {
@@ -59,6 +59,14 @@ export function IngestPanel({
     const key = `${parsed.kind}:${parsed.id}`
     if (lastFetchedKey.current === key) return
     lastFetchedKey.current = key
+
+    // Set default save mode on initial paste
+    if (parsed.kind === 'playlist') {
+      setSaveAs('course')
+    } else {
+      setSaveAs('loop')
+    }
+
     let cancelled = false
     setFetchState('loading')
     const handle = window.setTimeout(async () => {
@@ -92,18 +100,76 @@ export function IngestPanel({
 
   function handleSave() {
     if (!canSave || !parsed) return
+
+    const resetForm = (savedType: 'video' | 'course' | 'routine' | 'wishlist') => {
+      setSaved(savedType)
+      setUrl('')
+      setTitle('')
+      setCreator('')
+      setDuration('')
+      setDurationSec(0)
+      setChapters([])
+      lastFetchedKey.current = null
+      window.setTimeout(() => {
+        setSaved(null)
+        onClose()
+      }, 1200)
+    }
+
     if (parsed.kind === 'playlist') {
-      const course: Course = {
-        id: newId('crs_'),
-        playlistId: parsed.id,
-        url: url.trim(),
-        title: title.trim(),
-        creator: creator.trim(),
-        bucket,
-        addedAt: new Date().toISOString()
+      if (saveAs === 'course') {
+        const course: Course = {
+          id: newId('crs_'),
+          playlistId: parsed.id,
+          url: url.trim(),
+          title: title.trim(),
+          creator: creator.trim(),
+          bucket,
+          addedAt: new Date().toISOString()
+        }
+        onSaveCourse(course)
+        resetForm('course')
+      } else {
+        setFetchState('loading')
+        window.hearth.fetchPlaylistVideos(parsed.id)
+          .then((videos) => {
+            if (videos && videos.length > 0) {
+              // Iterate backwards (from end to start) so that the first video in the playlist
+              // is prepended last, ending up at the top of the loop!
+              for (let i = videos.length - 1; i >= 0; i--) {
+                const v = videos[i]
+                if (!v) continue
+                const item: LoopItem = {
+                  id: newId(saveAs === 'wishlist' ? 'wsh_' : 'itm_'),
+                  url: `https://www.youtube.com/watch?v=${v.videoId}`,
+                  videoId: v.videoId,
+                  title: v.title,
+                  creator: creator.trim() || 'YouTube',
+                  duration: v.duration || '',
+                  category,
+                  bucket,
+                  addedAt: new Date().toISOString(),
+                  paras: [],
+                  lastWatchedAt: null,
+                  durationSec: v.duration ? parseDurationLabel(v.duration) : 0,
+                  chapters: undefined,
+                  partsConsumed: 0
+                }
+                if (saveAs === 'wishlist') {
+                  onSaveWishlist(item)
+                } else {
+                  onSaveVideo(item)
+                }
+              }
+              resetForm(saveAs === 'wishlist' ? 'wishlist' : 'video')
+            } else {
+              setFetchState('fail')
+            }
+          })
+          .catch(() => {
+            setFetchState('fail')
+          })
       }
-      onSaveCourse(course)
-      setSaved('course')
     } else if (saveAs === 'routine') {
       const item: RoutineItem = {
         id: newId('rou_'),
@@ -114,7 +180,7 @@ export function IngestPanel({
         addedAt: new Date().toISOString()
       }
       onSaveRoutine(item)
-      setSaved('routine')
+      resetForm('routine')
     } else {
       const item: LoopItem = {
         id: newId(saveAs === 'wishlist' ? 'wsh_' : 'itm_'),
@@ -134,23 +200,12 @@ export function IngestPanel({
       }
       if (saveAs === 'wishlist') {
         onSaveWishlist(item)
-        setSaved('wishlist')
+        resetForm('wishlist')
       } else {
         onSaveVideo(item)
-        setSaved('video')
+        resetForm('video')
       }
     }
-    setUrl('')
-    setTitle('')
-    setCreator('')
-    setDuration('')
-    setDurationSec(0)
-    setChapters([])
-    lastFetchedKey.current = null
-    window.setTimeout(() => {
-      setSaved(null)
-      onClose()
-    }, 1000)
   }
 
   const hint =
@@ -162,8 +217,12 @@ export function IngestPanel({
       ? "Couldn't auto-fetch. Fill title and creator manually."
       : urlInvalid
       ? "Doesn't look like a YouTube URL."
-      : isPlaylist
+      : isPlaylist && saveAs === 'course'
       ? 'Playlist detected — saves as a Course.'
+      : isPlaylist && saveAs === 'loop'
+      ? 'Playlist detected — will save all videos from this playlist directly into your Loop.'
+      : isPlaylist && saveAs === 'wishlist'
+      ? 'Playlist detected — will save all videos from this playlist directly into your Wishlist.'
       : saveAs === 'routine'
       ? 'Routine: appears on Today every day with a daily checkbox.'
       : saveAs === 'wishlist'
@@ -212,7 +271,25 @@ export function IngestPanel({
               />
             </div>
 
-            {!isPlaylist && (
+            {isPlaylist ? (
+              <div className="ingest-row" style={{ gap: 12, alignItems: 'center' }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-faint)' }}>SAVE AS</span>
+                <div className="bucket-pill">
+                  <button className={saveAs === 'course' ? 'active' : ''} onClick={() => setSaveAs('course')}>Course</button>
+                  <button className={saveAs === 'loop' ? 'active' : ''} onClick={() => setSaveAs('loop')}>Loop Videos</button>
+                  <button className={saveAs === 'wishlist' ? 'active' : ''} onClick={() => setSaveAs('wishlist')}>Wishlist Videos</button>
+                </div>
+                {saveAs === 'loop' && (
+                  <>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-faint)', marginLeft: 8 }}>FOR</span>
+                    <div className="bucket-pill">
+                      <button className={bucket === 'WKDY' ? 'active' : ''} onClick={() => setBucket('WKDY')} title="Category-budgeted Spark plan on Today">Spark</button>
+                      <button className={bucket === 'SUN' ? 'active' : ''} onClick={() => setBucket('SUN')} title="Daily Entertainment strip (60m cap)">Entertainment</button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : (
               <div className="ingest-row" style={{ gap: 12, alignItems: 'center' }}>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-faint)' }}>SAVE AS</span>
                 <div className="bucket-pill">
@@ -232,47 +309,27 @@ export function IngestPanel({
               </div>
             )}
 
-            {isPlaylist && (
-              <div className="ingest-row" style={{ gap: 12, alignItems: 'center' }}>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-faint)' }}>FOR</span>
-                <div className="bucket-pill">
-                  <button className={bucket === 'WKDY' ? 'active' : ''} onClick={() => setBucket('WKDY')} title="Category-budgeted Spark plan on Today">Spark</button>
-                  <button className={bucket === 'SUN' ? 'active' : ''} onClick={() => setBucket('SUN')} title="Daily Entertainment strip (60m cap)">Entertainment</button>
-                </div>
+            {saveAs === 'course' && (
+              <div className="ingest-row" style={{ justifyContent: 'flex-end' }}>
+                <button className="ingest-save" disabled={!canSave} onClick={handleSave}>Save as Course</button>
               </div>
             )}
 
-            {!isPlaylist && saveAs === 'loop' && bucket !== 'SUN' && (
-              <div className="ingest-row" style={{ justifyContent: 'space-between' }}>
-                <div className="cat-chips">
-                  {categories.map((c) => (
-                    <button
-                      key={c.id}
-                      className={`cat-chip${category === c.id ? ' active' : ''}`}
-                      onClick={() => setCategory(c.id)}
-                    >
-                      <span className="dot" style={{ background: c.color }} />
-                      {c.name}
-                    </button>
-                  ))}
-                </div>
-                <button className="ingest-save" disabled={!canSave} onClick={handleSave}>Save</button>
-              </div>
-            )}
-            {!isPlaylist && saveAs === 'loop' && bucket === 'SUN' && (
+            {saveAs === 'routine' && (
               <div className="ingest-row" style={{ justifyContent: 'flex-end' }}>
-                <button className="ingest-save" disabled={!canSave} onClick={handleSave}>Save to Entertainment</button>
+                <button className="ingest-save" disabled={!canSave} onClick={handleSave}>Save to Routine</button>
               </div>
             )}
-            {(isPlaylist || saveAs === 'routine') && (
+
+            {saveAs === 'loop' && bucket === 'SUN' && (
               <div className="ingest-row" style={{ justifyContent: 'flex-end' }}>
                 <button className="ingest-save" disabled={!canSave} onClick={handleSave}>
-                  {isPlaylist ? 'Save as Course' : 'Save to Routine'}
+                  {isPlaylist ? 'Save Playlist to Entertainment' : 'Save to Entertainment'}
                 </button>
               </div>
             )}
 
-            {!isPlaylist && saveAs === 'wishlist' && (
+            {saveAs === 'loop' && bucket !== 'SUN' && (
               <div className="ingest-row" style={{ justifyContent: 'space-between' }}>
                 <div className="cat-chips">
                   {categories.map((c) => (
@@ -286,7 +343,29 @@ export function IngestPanel({
                     </button>
                   ))}
                 </div>
-                <button className="ingest-save" disabled={!canSave} onClick={handleSave}>Save to Wishlist</button>
+                <button className="ingest-save" disabled={!canSave} onClick={handleSave}>
+                  {isPlaylist ? 'Save Playlist to Loop' : 'Save'}
+                </button>
+              </div>
+            )}
+
+            {saveAs === 'wishlist' && (
+              <div className="ingest-row" style={{ justifyContent: 'space-between' }}>
+                <div className="cat-chips">
+                  {categories.map((c) => (
+                    <button
+                      key={c.id}
+                      className={`cat-chip${category === c.id ? ' active' : ''}`}
+                      onClick={() => setCategory(c.id)}
+                    >
+                      <span className="dot" style={{ background: c.color }} />
+                      {c.name}
+                    </button>
+                  ))}
+                </div>
+                <button className="ingest-save" disabled={!canSave} onClick={handleSave}>
+                  {isPlaylist ? 'Save Playlist to Wishlist' : 'Save to Wishlist'}
+                </button>
               </div>
             )}
 

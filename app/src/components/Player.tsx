@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useMemo } from 'react'
 import type { LoopItem } from '../types'
 import { buildEmbedUrl, buildWatchUrl } from '../lib/youtube'
 
@@ -7,6 +7,8 @@ interface Props {
   isFavorited: boolean
   isWatched: boolean
   focusTimerLabel: string | null
+  isFocusTimerManuallyPaused?: boolean
+  onToggleFocusTimerPause?: () => void
   /** Seconds to resume from (0 / undefined = start). */
   startSec?: number
   /** Hard stop boundary for partitioned playback (undefined = play to end). */
@@ -58,6 +60,8 @@ export function Player({
   isFavorited,
   isWatched,
   focusTimerLabel,
+  isFocusTimerManuallyPaused,
+  onToggleFocusTimerPause,
   startSec,
   endSec,
   partLabel,
@@ -70,11 +74,53 @@ export function Player({
   doneHint,
   onBookmark
 }: Props) {
-  // Rewatch prompt state — pops up when auto-done fires OR when the user
-  // clicks Done. Twist: reuses the existing heart icon; clicking heart sends
-  // the just-watched item to Wishlist (that's what heart already does).
   const [rewatchPromptOpen, setRewatchPromptOpen] = useState(false)
   const [rewatchArmed, setRewatchArmed] = useState(false) // heart already clicked in this session
+
+  const [showTranscript, setShowTranscript] = useState(false)
+  const [transcript, setTranscript] = useState<import('../types').TranscriptCue[]>([])
+  const [transcriptLoading, setTranscriptLoading] = useState(false)
+  const [transcriptError, setTranscriptError] = useState('')
+  const [videoTime, setVideoTime] = useState<number>(startSec ?? 0)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [autoScroll, setAutoScroll] = useState(true)
+
+  const handleToggleTranscript = async () => {
+    const nextShow = !showTranscript
+    setShowTranscript(nextShow)
+    if (nextShow && transcript.length === 0 && !transcriptLoading) {
+      setTranscriptLoading(true)
+      setTranscriptError('')
+      try {
+        const cues = await window.hearth.fetchVideoTranscript(item.videoId)
+        setTranscript(cues)
+        if (cues.length === 0) {
+          setTranscriptError('No transcript available for this video.')
+        }
+      } catch (err) {
+        setTranscriptError('Failed to fetch transcript.')
+      } finally {
+        setTranscriptLoading(false)
+      }
+    }
+  }
+
+  const activeCueIndex = useMemo(() => {
+    if (transcript.length === 0) return -1
+    return transcript.findIndex((cue, i) => {
+      const nextCue = transcript[i + 1]
+      return videoTime >= cue.startSec && (!nextCue || videoTime < nextCue.startSec)
+    })
+  }, [transcript, videoTime])
+
+  // Scroll active cue into view
+  useEffect(() => {
+    if (!autoScroll || activeCueIndex < 0) return
+    const el = document.querySelector(`.cue-item[data-index="${activeCueIndex}"]`)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }, [activeCueIndex, autoScroll])
 
   // Keep a live currentTime for chapter/bookmark commands. This is a ref so
   // the postMessage handler updates don't cause re-renders.
@@ -173,6 +219,7 @@ export function Player({
         // Track live playhead so chapter/bookmark commands know where we are.
         if (typeof info.currentTime === 'number') {
           currentTimeRef.current = info.currentTime
+          setVideoTime(info.currentTime)
         }
         if (autoDoneFiredRef.current) return
         // Natural full-video end — YouTube fires state 0 ('ended').
@@ -219,9 +266,20 @@ export function Player({
           </div>
         </div>
         {focusTimerLabel && (
-          <div className="focus-pill" title="Focus session — pauses when you pause the video">
-            <span className="focus-dot" />
+          <div className="focus-pill" title="Focus session — ticks at half-speed when video is paused until stopped. Click pause button to hold completely.">
+            <span className={`focus-dot ${isFocusTimerManuallyPaused ? 'paused' : ''}`} />
             {focusTimerLabel}
+            {onToggleFocusTimerPause && (
+              <button
+                type="button"
+                className="focus-pill-toggle"
+                onClick={onToggleFocusTimerPause}
+                title={isFocusTimerManuallyPaused ? 'Resume focus timer' : 'Manually pause focus timer'}
+                aria-label={isFocusTimerManuallyPaused ? 'Resume focus timer' : 'Manually pause focus timer'}
+              >
+                {isFocusTimerManuallyPaused ? '▶' : '❚❚'}
+              </button>
+            )}
           </div>
         )}
         <button
@@ -232,6 +290,17 @@ export function Player({
           style={{ marginLeft: 4 }}
         >
           <HeartIcon filled={isFavorited} />
+        </button>
+        <button
+          className={`heart-btn ${showTranscript ? 'on' : ''}`}
+          onClick={handleToggleTranscript}
+          title={showTranscript ? 'Hide Transcript' : 'Show Transcript'}
+          aria-label={showTranscript ? 'Hide Transcript' : 'Show Transcript'}
+          style={{ marginLeft: 4 }}
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 6h16M4 12h16M4 18h11" />
+          </svg>
         </button>
         {onAttachNote && (
           <button
@@ -269,21 +338,110 @@ export function Player({
         </button>
       </div>
 
-      <div className="player-stage">
-        <div className="player-frame-wrap">
-          <iframe
-            key={item.videoId}
-            src={buildEmbedUrl(item.videoId, {
-              startSec: initialStart.current,
-              endSec: initialEnd.current
-            })}
-            title={item.title}
-            data-video-id={item.videoId}
-            allow="autoplay; encrypted-media; picture-in-picture; fullscreen; accelerometer; gyroscope"
-            allowFullScreen
-            referrerPolicy="strict-origin-when-cross-origin"
-          />
+      <div className="player-content-wrap">
+        <div className={`player-stage${showTranscript ? ' with-transcript' : ''}`}>
+          <div className="player-frame-wrap">
+            <iframe
+              key={item.videoId}
+              src={buildEmbedUrl(item.videoId, {
+                startSec: initialStart.current,
+                endSec: initialEnd.current
+              })}
+              title={item.title}
+              data-video-id={item.videoId}
+              allow="autoplay; encrypted-media; picture-in-picture; fullscreen; accelerometer; gyroscope"
+              allowFullScreen
+              referrerPolicy="strict-origin-when-cross-origin"
+            />
+          </div>
         </div>
+
+        {showTranscript && (
+          <div className="player-transcript-pane">
+            <div className="transcript-head">
+              <h3>Transcript</h3>
+              <div className="transcript-search-wrap">
+                <input
+                  type="text"
+                  placeholder="Search transcript..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="ingest-input text"
+                  style={{ fontSize: 12, padding: '4px 8px', width: '100%', background: 'var(--bg-card)' }}
+                />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--ink-faint)', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={autoScroll}
+                    onChange={(e) => setAutoScroll(e.target.checked)}
+                  />
+                  Auto-scroll
+                </label>
+              </div>
+            </div>
+
+            <div className="transcript-body" style={{ flex: 1, overflowY: 'auto', padding: '10px 0' }}>
+              {transcriptLoading && <div className="transcript-status" style={{ padding: '20px', textAlign: 'center', color: 'var(--ink-faint)', fontSize: 13 }}>Loading transcript...</div>}
+              {transcriptError && <div className="transcript-status error" style={{ padding: '20px', textAlign: 'center', color: 'oklch(0.55 0.15 25)', fontSize: 13 }}>{transcriptError}</div>}
+              
+              {!transcriptLoading && !transcriptError && (() => {
+                const filteredCues = transcript.map((c, i) => ({ ...c, originalIndex: i }))
+                  .filter(c => c.text.toLowerCase().includes(searchTerm.toLowerCase()))
+
+                if (filteredCues.length === 0) {
+                  return <div className="transcript-status" style={{ padding: '20px', textAlign: 'center', color: 'var(--ink-faint)', fontSize: 13 }}>No matching lines found.</div>
+                }
+
+                return filteredCues.map((c) => {
+                  const isActive = c.originalIndex === activeCueIndex
+                  const timeLabel = formatHms(c.startSec)
+                  return (
+                    <div
+                      key={c.originalIndex}
+                      className={`cue-item${isActive ? ' active-cue' : ''}`}
+                      data-index={c.originalIndex}
+                      onClick={() => seekTo(c.startSec)}
+                      style={{
+                        padding: '8px 14px',
+                        cursor: 'pointer',
+                        borderRadius: 6,
+                        display: 'flex',
+                        gap: 12,
+                        alignItems: 'flex-start',
+                        transition: 'background 0.12s ease',
+                        background: isActive ? 'var(--ember-tint)' : ''
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontFamily: 'var(--mono)',
+                          fontSize: 11,
+                          color: 'var(--ember)',
+                          fontWeight: 600,
+                          whiteSpace: 'nowrap',
+                          marginTop: 2
+                        }}
+                      >
+                        {timeLabel}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 13,
+                          lineHeight: 1.5,
+                          color: isActive ? 'var(--ink)' : 'var(--ink-soft)'
+                        }}
+                      >
+                        {c.text}
+                      </span>
+                    </div>
+                  )
+                })
+              })()}
+            </div>
+          </div>
+        )}
       </div>
 
       {item.paras && item.paras.length > 0 && (

@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "vite",
+    "dev:vite": "vite",
     "build:renderer": "vite build",
     "build": "vite build",
     "tauri": "tauri",

@@ -14,7 +14,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ProjectRoot = "C:\Github Repos\MyMedia\hearth-cellar-project\app"
+$ProjectRoot = "C:\Users\dtmat\Dropbox\Github Repos\MyMedia\hearth-cellar-project\app"
 $TargetDir   = "C:\Users\dtmat\AppData\Local\Temp\hc-target"
 $BuiltExe    = "$TargetDir\release\hearth-cellar.exe"
 
@@ -24,7 +24,8 @@ $BuiltExe    = "$TargetDir\release\hearth-cellar.exe"
 # sandboxed copy was deleted on 2026-06-29 and the Start Menu shortcut was
 # repointed here, so there's only one install dir now.
 $InstallTargets = @(
-    "C:\Users\dtmat\AppData\Local\Hearth & Cellar\hearth-cellar.exe"
+    "C:\Users\dtmat\AppData\Local\Hearth & Cellar\hearth-cellar.exe",
+    "C:\Users\dtmat\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Local\Hearth & Cellar\hearth-cellar.exe"
 )
 
 $anyExists = $false
@@ -46,7 +47,7 @@ Write-Host "Building (Tauri release, mingw-safe CARGO_TARGET_DIR)..." -Foregroun
 $env:CARGO_TARGET_DIR = $TargetDir
 Push-Location $ProjectRoot
 try {
-    & npx tauri build
+    & npx.cmd tauri build
     if ($LASTEXITCODE -ne 0) { throw "Tauri build failed (exit $LASTEXITCODE)" }
 } finally {
     Pop-Location

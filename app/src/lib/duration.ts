@@ -11,9 +11,10 @@ export function parseDurationLabel(label: string | undefined | null): number {
   if (parts.length === 0 || parts.some((p) => !/^\d+$/.test(p))) return 0
   const nums = parts.map((p) => Number(p))
   if (nums.some((n) => !Number.isFinite(n))) return 0
-  if (nums.length === 1) return nums[0]
-  if (nums.length === 2) return nums[0] * 60 + nums[1]
-  if (nums.length === 3) return nums[0] * 3600 + nums[1] * 60 + nums[2]
+  const [n0, n1, n2] = nums
+  if (nums.length === 1 && n0 !== undefined) return n0
+  if (nums.length === 2 && n0 !== undefined && n1 !== undefined) return n0 * 60 + n1
+  if (nums.length === 3 && n0 !== undefined && n1 !== undefined && n2 !== undefined) return n0 * 3600 + n1 * 60 + n2
   return 0
 }
 

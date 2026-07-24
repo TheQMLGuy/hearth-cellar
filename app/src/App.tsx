@@ -15,9 +15,10 @@ import type {
   Screen,
   PlaylistNotePageMapping
 } from './types'
-import { loadStore, saveStore, weekStartIso } from './storeClient'
+import { loadStore, saveStore, weekStartIso, knownVideoIds } from './storeClient'
 import {
   autoMode,
+  categoryAllowedToday,
   computeDayPlan,
   computeEntertainmentPlan,
   itemsForPlan,
@@ -40,13 +41,43 @@ import { Routine } from './components/Routine'
 import { Settings } from './components/Settings'
 import { Notes } from './components/Notes'
 import { Wishlist } from './components/Wishlist'
+import { Feed } from './components/Feed'
+import { Search } from './components/Search'
 import { Entertainment } from './components/Entertainment'
 import { AttachNoteModal } from './components/AttachNoteModal'
 import { BreakOverlay } from './components/BreakOverlay'
 import { NoteStudyView } from './components/NoteStudyView'
+import { SparkCaptureSheet } from './components/SparkCaptureSheet'
+import { SparksScreen } from './components/SparksScreen'
+import type { Spark } from './types'
 
 function formatDateLabel(d: Date = new Date()): string {
   return d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
+}
+
+function moveToDelayedLoop(store: PersistedStore): PersistedStore {
+  const today = todayKey()
+  const stale = planIsStale(store.todayPlan, store.mode, today)
+  if (!stale || !store.todayPlan) {
+    return store
+  }
+
+  // Find all items in todayPlan.itemIds that are still in store.loop
+  const prevItemIds = new Set(store.todayPlan.itemIds)
+  const itemsToDelay = store.loop.filter((item) => prevItemIds.has(item.id))
+
+  if (itemsToDelay.length === 0) {
+    return store
+  }
+
+  const loop = store.loop.filter((item) => !prevItemIds.has(item.id))
+  const delayedLoop = [...(store.delayedLoop ?? []), ...itemsToDelay]
+
+  return {
+    ...store,
+    loop,
+    delayedLoop
+  }
 }
 
 function recomputePlan(
@@ -55,13 +86,17 @@ function recomputePlan(
 ) {
   const plan = computeDayPlan({
     loop: s.loop,
+    delayedLoop: s.delayedLoop,
     mode: s.mode,
     channelFresh: s.channelFresh,
     channelBucketByChannelId,
     date: todayKey(),
     sundayMinutes: s.sundayMinutes,
+    weekdayMinutes: s.weekdayMinutes,
     sliceTargetSec: (s.sliceTargetMin ?? 30) * 60,
-    categories: s.categories
+    categories: s.categories,
+    progress: s.progress,
+    activeCategoryIds: s.todayPlan?.date === todayKey() ? s.todayPlan.activeCategoryIds : undefined
   })
   // Entertainment is a sibling strip on Today — also sticky for the day,
   // also recomputed whenever the main plan recomputes (refresh, day rollover,
@@ -78,13 +113,34 @@ export function App() {
   const [screen, setScreen] = useState<Screen>('today')
   const [activeItem, setActiveItem] = useState<LoopItem | null>(null)
   const [activeCourseFocusId, setActiveCourseFocusId] = useState<string | null>(null)
+  const [activeCourseFocusVideoId, setActiveCourseFocusVideoId] = useState<string | null>(null)
+  const [exploreLoading, setExploreLoading] = useState(false)
   const [ingestOpen, setIngestOpen] = useState(false)
+  const [sparkCaptureOpen, setSparkCaptureOpen] = useState(false)
   const [attachNoteFor, setAttachNoteFor] = useState<LoopItem | null>(null)
   const [dateLabel] = useState(formatDateLabel())
   const [onBreak, setOnBreak] = useState(false)
   const [breakDurationSec, setBreakDurationSec] = useState(0)
   const [videoPlaying, setVideoPlaying] = useState(false)
-  const [focusElapsedSec, setFocusElapsedSec] = useState(0)
+  const [focusTimerManuallyPaused, setFocusTimerManuallyPaused] = useState(false)
+  const [focusElapsedByContext, setFocusElapsedByContext] = useState<Record<string, number>>({})
+  const activeFocusContext = useMemo(() => {
+    if (screen === 'courseFocus' && activeCourseFocusVideoId) {
+      return `v:${activeCourseFocusVideoId}`
+    }
+    return activeItem
+      ? `v:${activeItem.id}`
+      : activeCourseFocusId
+      ? `c:${activeCourseFocusId}`
+      : null
+  }, [screen, activeItem?.id, activeCourseFocusId, activeCourseFocusVideoId])
+  useEffect(() => {
+    if (screen !== 'courseFocus') {
+      setActiveCourseFocusVideoId(null)
+    }
+  }, [screen])
+
+  const currentElapsedSec = activeFocusContext ? (focusElapsedByContext[activeFocusContext] ?? 0) : 0
   const focusContextRef = useRef<'video' | 'course' | null>(null)
 
   useEffect(() => {
@@ -93,7 +149,7 @@ export function App() {
       if (!s.dailySessions || s.dailySessions.date !== today) {
         s = {
           ...s,
-          dailySessions: { date: today, courseSessionsCompleted: 0, totalSessionsCompleted: 0, courseSessionsByCategory: {} }
+          dailySessions: { date: today, courseSessionsCompleted: 0, totalSessionsCompleted: 0, courseSessionsByCategory: {}, courseSessionsByCourse: {} }
         }
         saveStore(s)
       }
@@ -127,7 +183,12 @@ export function App() {
       if (s.mode !== m) {
         s = { ...s, mode: m, todayPlan: null }
       }
-      window.hearth.setApiKey(s.youtubeApiKey)
+      const keys = s.youtubeApiKeys && s.youtubeApiKeys.length > 0
+        ? s.youtubeApiKeys
+        : s.youtubeApiKey
+        ? [s.youtubeApiKey]
+        : []
+      window.hearth.setApiKeys(keys)
       setStore(s)
     })
   }, [])
@@ -139,64 +200,43 @@ export function App() {
     return map
   }, [store])
 
+  // Guard the "empty plan → recompute" safety-net so it fires at most once per
+  // session. Without this ref, recompute yielding an empty plan again (e.g.
+  // no eligible items match today's categories) would immediately re-trigger
+  // this effect via the fresh store reference, looping until the webview OOMs.
+  const emptyPlanRescuedRef = useRef(false)
   useEffect(() => {
     if (!store) return
     const today = todayKey()
-    if (planIsStale(store.todayPlan, store.mode, today)) {
+    const isEmptyWkdyPlan = store.mode === 'WKDY' && (!store.todayPlan || !store.todayPlan.parts || store.todayPlan.parts.length === 0)
+    const hasWkdyLoopItems = store.loop.some((it) => it.bucket === 'WKDY')
+    const stale = planIsStale(store.todayPlan, store.mode, today)
+    const emptyRescue = isEmptyWkdyPlan && hasWkdyLoopItems && !emptyPlanRescuedRef.current
+
+    if (stale || emptyRescue) {
+      if (emptyRescue) emptyPlanRescuedRef.current = true
+      const migratedStore = stale ? moveToDelayedLoop(store) : store
       const next: PersistedStore = {
-        ...store,
-        todayPlan: recomputePlan(store, channelBucketByChannelId)
+        ...migratedStore,
+        todayPlan: recomputePlan(migratedStore, channelBucketByChannelId)
       }
       setStore(next)
       saveStore(next)
     }
   }, [store, channelBucketByChannelId])
 
-  const refreshedRef = useRef(false)
-  useEffect(() => {
-    if (!store || refreshedRef.current) return
-    refreshedRef.current = true
-    refreshChannelsImpl(store)
-    refreshSundayWeekly(store)
-  }, [store])
+  // Initial per-launch auto-refresh is intentionally OFF. The day-rollover
+  // effect below already forces a full refresh once per calendar day, and the
+  // manual Refresh button covers the "grab whatever's new right now" case.
+  // Running a fetch on every launch caused a visible startup freeze from the
+  // whole-App re-render when the cache metadata setStore fired.
+  //
+  // If we ever want fresher intra-day content again, gate this by
+  // `lastRefreshAt` cooldown instead of unconditionally re-running.
 
   const refreshChannelsImpl = useCallback(async (s: PersistedStore, force = false) => {
-    if (s.channels.length === 0) return
-    const SIX_HOURS_MS = 6 * 60 * 60 * 1000
-    const now = Date.now()
-    const next: Record<string, ChannelFresh> = { ...s.channelFresh }
-
-    // Only fetch channels whose cached freshness is stale or missing. Then
-    // hit them in parallel (Promise.all) so wall-time scales with the SLOWEST
-    // channel instead of the SUM of all channels.
-    const toFetch = s.channels.filter((ch) => {
-      if (force) return true
-      const existing = s.channelFresh[ch.channelId]
-      if (!existing || !existing.fetchedAt) return true
-      const age = now - Date.parse(existing.fetchedAt)
-      return age >= SIX_HOURS_MS
-    })
-    if (toFetch.length === 0) return
-
-    const results = await Promise.all(
-      toFetch.map((ch) => window.hearth.fetchChannelLatest(ch.channelId))
-    )
-    for (const res of results) {
-      if (!res) continue
-      next[res.channelId] = {
-        channelId: res.channelId,
-        videoId: res.videoId,
-        title: res.title,
-        publishedAt: res.publishedAt,
-        fetchedAt: new Date().toISOString()
-      }
-    }
-    setStore((prev) => {
-      if (!prev) return prev
-      const updated = { ...prev, channelFresh: next }
-      saveStore(updated)
-      return updated
-    })
+    // No-op: Disabled fetchChannelLatest background checking to save YouTube API quota.
+    // auto-ingest (refreshChannelsWeekly) already pulls all uploads for active channels.
   }, [])
 
   useEffect(() => {
@@ -204,13 +244,20 @@ export function App() {
       if ((e.ctrlKey || e.metaKey) && (e.key === 'i' || e.key === 'I')) {
         e.preventDefault()
         setIngestOpen((v) => !v)
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+        // Ctrl+S opens the Spark capture dialog. Preventing default so the
+        // browser's Save dialog doesn't fire underneath our modal.
+        e.preventDefault()
+        if (!sparkCaptureOpen) {
+          setSparkCaptureOpen(true)
+        }
       } else if (e.key === 'Escape') {
         if (ingestOpen) setIngestOpen(false)
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [ingestOpen])
+  }, [ingestOpen, sparkCaptureOpen])
 
   const persist = useCallback((next: PersistedStore) => {
     setStore(next)
@@ -294,7 +341,12 @@ export function App() {
       const swap = idx + dir
       if (idx < 0 || swap < 0 || swap >= store.courses.length) return
       const courses = store.courses.slice()
-      ;[courses[idx], courses[swap]] = [courses[swap], courses[idx]]
+      const c1 = courses[idx]
+      const c2 = courses[swap]
+      if (c1 && c2) {
+        courses[idx] = c2
+        courses[swap] = c1
+      }
       persist({ ...store, courses })
     },
     [store, persist]
@@ -304,13 +356,9 @@ export function App() {
     (categoryId: string, courseId: string | null) => {
       if (!store) return
       const acbc = { ...store.activeCourseByCategory }
-      if (courseId) {
-        acbc[categoryId] = courseId
-      } else {
-        delete acbc[categoryId]
-      }
-      // Also update legacy activeCourseId for backward compat (pick the first active)
-      const firstActive = Object.values(acbc)[0] ?? null
+      acbc[categoryId] = courseId || '__none__'
+      // Also update legacy activeCourseId for backward compat (pick the first active, ignore __none__)
+      const firstActive = Object.values(acbc).find((id) => id !== '__none__') ?? null
       persist({ ...store, activeCourseByCategory: acbc, activeCourseId: firstActive })
     },
     [store, persist]
@@ -334,7 +382,8 @@ export function App() {
     (id: string, cat: CategoryId) => {
       if (!store) return
       const loop = store.loop.map((it) => (it.id === id ? { ...it, category: cat } : it))
-      const updated: PersistedStore = { ...store, loop }
+      const delayedLoop = (store.delayedLoop ?? []).map((it) => (it.id === id ? { ...it, category: cat } : it))
+      const updated: PersistedStore = { ...store, loop, delayedLoop }
       persist({
         ...updated,
         todayPlan: recomputePlan(updated, channelBucketByChannelId)
@@ -347,7 +396,8 @@ export function App() {
     (id: string, bucket: Bucket) => {
       if (!store) return
       const loop = store.loop.map((it) => (it.id === id ? { ...it, bucket } : it))
-      const updated: PersistedStore = { ...store, loop }
+      const delayedLoop = (store.delayedLoop ?? []).map((it) => (it.id === id ? { ...it, bucket } : it))
+      const updated: PersistedStore = { ...store, loop, delayedLoop }
       persist({
         ...updated,
         todayPlan: recomputePlan(updated, channelBucketByChannelId)
@@ -361,10 +411,12 @@ export function App() {
       if (!store) return
       const victim =
         store.loop.find((it) => it.id === id) ??
+        store.delayedLoop?.find((it) => it.id === id) ??
         store.wishlist.find((it) => it.id === id) ??
         store.done.items.find((it) => it.id === id) ??
         null
       const loop = store.loop.filter((it) => it.id !== id)
+      const delayedLoop = (store.delayedLoop ?? []).filter((it) => it.id !== id)
       const wishlist = store.wishlist.filter((it) => it.id !== id)
       const watched = store.watched.filter((v) => v !== id)
       // Soft-delete: video goes to trash for 30 days. Restore or purge
@@ -373,7 +425,7 @@ export function App() {
       const trash = victim
         ? [{ deletedAt: new Date().toISOString(), kind: 'video' as const, video: victim }, ...(store.trash ?? [])]
         : store.trash ?? []
-      const updated: PersistedStore = { ...store, loop, wishlist, watched, trash }
+      const updated: PersistedStore = { ...store, loop, delayedLoop, wishlist, watched, trash }
       persist({
         ...updated,
         todayPlan: recomputePlan(updated, channelBucketByChannelId)
@@ -444,6 +496,22 @@ export function App() {
     (id: string) => {
       if (!store) return
       persist({ ...store, bookmarks: (store.bookmarks ?? []).filter((b) => b.id !== id) })
+    },
+    [store, persist]
+  )
+
+  const handleSaveSpark = useCallback(
+    (spark: Spark) => {
+      if (!store) return
+      persist({ ...store, sparks: [spark, ...(store.sparks ?? [])] })
+    },
+    [store, persist]
+  )
+
+  const handleDeleteSpark = useCallback(
+    (id: string) => {
+      if (!store) return
+      persist({ ...store, sparks: (store.sparks ?? []).filter((s) => s.id !== id) })
     },
     [store, persist]
   )
@@ -529,22 +597,90 @@ export function App() {
   // (WKDY and SUN), auto-ingesting each new video as a real LoopItem using
   // the channel's own bucket + category. Shorts are dropped server-side in
   // the Rust fetcher.
-  const refreshSundayWeekly = useCallback(async (s: import('./types').PersistedStore, force = false) => {
+  const refreshChannelsWeekly = useCallback(async (s: import('./types').PersistedStore, force = false) => {
     if (s.channels.length === 0) return
     const ws = weekStartIso()
     const HOUR_MS = 60 * 60 * 1000
     const now = Date.now()
     const nextCache = { ...s.sundayChannelWeekly }
-    const existingVideoIds = new Set([
-      ...s.loop.map((i) => i.videoId),
-      ...s.done.items.map((i) => i.videoId)
-    ])
-    const newLoopItems: LoopItem[] = []
+    // Dedup against every bucket we know about — wishlist/trash/shorts
+    // included — so channel refresh doesn't undo a user's earlier decision to
+    // park or delete a video.
+    const existingVideoIds = knownVideoIds(s)
+
+    const newPlaylistChannelItems: LoopItem[] = []
+    let channels = [...s.channels]
+    let channelsChanged = false
     let cacheChanged = false
 
-    // Decide which channels actually need a network round trip; everything
-    // else is fresh enough in the cache.
-    const toFetch = s.channels.filter((ch) => {
+    // Process passive playlist channels
+    channels = channels.filter((ch) => {
+      if (!ch.isPlaylistChannel) return true
+
+      const existing = nextCache[ch.channelId]
+      const needsRelease = !existing || existing.weekStart !== ws || force
+
+      if (needsRelease) {
+        const count = Math.min(ch.playlistVideos?.length ?? 0, ch.videosPerWeek ?? 2)
+        if (count > 0) {
+          const remaining = [...(ch.playlistVideos ?? [])]
+          const picked: import('./types').PlaylistVideo[] = []
+          for (let i = 0; i < count; i++) {
+            if (remaining.length === 0) break
+            const idx = Math.floor(Math.random() * remaining.length)
+            const item = remaining.splice(idx, 1)[0]
+            if (item) picked.push(item)
+          }
+
+          ch.playlistVideos = remaining
+          ch.releasedVideoIds = [...(ch.releasedVideoIds ?? []), ...picked.map((p) => p.videoId)]
+          channelsChanged = true
+
+          nextCache[ch.channelId] = {
+            channelId: ch.channelId,
+            weekStart: ws,
+            fetchedAt: new Date().toISOString(),
+            videos: picked.map((p) => ({
+              videoId: p.videoId,
+              title: p.title,
+              publishedAt: new Date().toISOString()
+            }))
+          }
+          cacheChanged = true
+
+          for (const p of picked) {
+            if (existingVideoIds.has(p.videoId)) continue
+            existingVideoIds.add(p.videoId)
+            newPlaylistChannelItems.push({
+              id: `chn_${p.videoId}`,
+              url: `https://www.youtube.com/watch?v=${p.videoId}`,
+              videoId: p.videoId,
+              title: p.title,
+              creator: ch.name,
+              duration: p.duration ?? '',
+              category: ch.category,
+              bucket: ch.bucket,
+              addedAt: new Date().toISOString(),
+              paras: [],
+              lastWatchedAt: null
+            })
+          }
+        }
+      }
+
+      // If no videos are left to release, this channel vanishes!
+      const isDone = (ch.playlistVideos?.length ?? 0) === 0
+      if (isDone) {
+        channelsChanged = true
+        return false
+      }
+      return true
+    })
+
+    // Process regular YouTube channels
+    const regularChannels = channels.filter((c) => !c.isPlaylistChannel)
+    const newLoopItems: LoopItem[] = []
+    const toFetch = regularChannels.filter((ch) => {
       if (force) return true
       const existing = nextCache[ch.channelId]
       return !existing
@@ -552,7 +688,6 @@ export function App() {
         || now - Date.parse(existing.fetchedAt) >= HOUR_MS
     })
 
-    // Run all the fetches in parallel — wall time = slowest channel, not sum.
     const fetched = await Promise.all(
       toFetch.map(async (ch) => ({
         channel: ch,
@@ -585,22 +720,22 @@ export function App() {
         })
       }
     }
-    if (cacheChanged || newLoopItems.length > 0) {
+
+    const allNewItems = [...newPlaylistChannelItems, ...newLoopItems]
+    if (cacheChanged || allNewItems.length > 0 || channelsChanged) {
       setStore((prev) => {
         if (!prev) return prev
-        // Dedup against BOTH loop AND this week's done bucket — channel
-        // auto-ingest was re-introducing videoIds users had just skipped or
-        // watched. The skipped/watched item should stay in `done` until
-        // Monday clears it, not bounce back into `loop` on the next refresh.
-        const liveExisting = new Set([
-          ...prev.loop.map((i) => i.videoId),
-          ...prev.done.items.map((i) => i.videoId)
-        ])
-        const trulyNew = newLoopItems.filter((it) => !liveExisting.has(it.videoId))
+        // Re-check dedup against the LATEST store — the user may have moved
+        // items to wishlist/trash between when the fetch started and now.
+        const liveExisting = knownVideoIds(prev)
+        const trulyNew = allNewItems.filter((it) => !liveExisting.has(it.videoId))
         const loop = trulyNew.length > 0 ? [...trulyNew, ...prev.loop] : prev.loop
         const shouldRecompute = trulyNew.length > 0
+        const finalChannels = channelsChanged ? channels : prev.channels
+
         const interim: import('./types').PersistedStore = {
           ...prev,
+          channels: finalChannels,
           sundayChannelWeekly: nextCache,
           loop
         }
@@ -618,9 +753,14 @@ export function App() {
     (channel: Channel) => {
       if (!store) return
       persist({ ...store, channels: [channel, ...store.channels] })
-      // Kick off Sunday weekly fetch immediately if this is a SUN channel
+      
+      if (channel.isPlaylistChannel) {
+        refreshChannelsWeekly({ ...store, channels: [channel, ...store.channels] }, true)
+        return
+      }
+
       if (channel.bucket === 'SUN') {
-        refreshSundayWeekly({ ...store, channels: [channel, ...store.channels] }, true)
+        refreshChannelsWeekly({ ...store, channels: [channel, ...store.channels] }, true)
       }
       window.hearth.fetchChannelLatest(channel.channelId).then((res) => {
         if (!res) return
@@ -644,7 +784,7 @@ export function App() {
         })
       })
     },
-    [store, persist]
+    [store, persist, refreshChannelsWeekly]
   )
 
   const handleRemoveChannel = useCallback(
@@ -659,22 +799,63 @@ export function App() {
     [store, persist]
   )
 
+  const handleSetChannelPlaylistRate = useCallback(
+    (id: string, rate: number) => {
+      if (!store) return
+      const channels = store.channels.map((c) =>
+        c.id === id ? { ...c, videosPerWeek: rate } : c
+      )
+      persist({ ...store, channels })
+    },
+    [store, persist]
+  )
+
   const handleSetChannelBucket = useCallback(
     (id: string, bucket: Bucket) => {
       if (!store) return
+      const targetChannel = store.channels.find((c) => c.id === id)
+      if (!targetChannel) return
+
       const channels = store.channels.map((c) => (c.id === id ? { ...c, bucket } : c))
-      const updated = { ...store, channels }
-      persist(updated)
+      const loop = store.loop.map((item) => {
+        if (item.creator.toLowerCase() === targetChannel.name.toLowerCase()) {
+          return { ...item, bucket }
+        }
+        return item
+      })
+
+      const updated = { ...store, channels, loop }
+      persist({ ...updated, todayPlan: recomputePlan(updated, channelBucketByChannelId) })
       // If the channel just became SUN, fetch its week's uploads immediately.
-      if (bucket === 'SUN') refreshSundayWeekly(updated, true)
+      if (bucket === 'SUN') refreshChannelsWeekly(updated, true)
     },
-    [store, persist, refreshSundayWeekly]
+    [store, persist, channelBucketByChannelId, refreshChannelsWeekly]
   )
 
   const handleSetChannelCategory = useCallback(
     (id: string, category: CategoryId) => {
       if (!store) return
+      const targetChannel = store.channels.find((c) => c.id === id)
+      if (!targetChannel) return
+
       const channels = store.channels.map((c) => (c.id === id ? { ...c, category } : c))
+      const loop = store.loop.map((item) => {
+        if (item.creator.toLowerCase() === targetChannel.name.toLowerCase()) {
+          return { ...item, category }
+        }
+        return item
+      })
+
+      const updated = { ...store, channels, loop }
+      persist({ ...updated, todayPlan: recomputePlan(updated, channelBucketByChannelId) })
+    },
+    [store, persist, channelBucketByChannelId]
+  )
+
+  const handleSetChannelExplore = useCallback(
+    (id: string, isExplore: boolean) => {
+      if (!store) return
+      const channels = store.channels.map((c) => (c.id === id ? { ...c, isExplore } : c))
       persist({ ...store, channels })
     },
     [store, persist]
@@ -691,7 +872,7 @@ export function App() {
       persist(updated)
       // If any imports are SUN, kick off the weekly fetch + auto-ingest
       if (additions.some((c) => c.bucket === 'SUN')) {
-        refreshSundayWeekly(updated, true)
+        refreshChannelsWeekly(updated, true)
       }
       // Fetch latest for each imported channel in background
       for (const ch of additions) {
@@ -718,7 +899,7 @@ export function App() {
         })
       }
     },
-    [store, persist, refreshSundayWeekly]
+    [store, persist, refreshChannelsWeekly]
   )
 
   const handlePlaylistVideosFetched = useCallback(
@@ -784,6 +965,43 @@ export function App() {
       const promoted: LoopItem = { ...item, id: item.id.replace(/^wsh_/, 'itm_') }
       const loop = [promoted, ...store.loop]
       const interim: PersistedStore = { ...store, loop, wishlist }
+      persist({
+        ...interim,
+        todayPlan: recomputePlan(interim, channelBucketByChannelId)
+      })
+    },
+    [store, persist, channelBucketByChannelId]
+  )
+
+  // Move a loop item into the wishlist and drop it from the loop. Used by the
+  // heart button in Settings → Videos so users can shove uninteresting items
+  // out of the daily rotation without losing them entirely.
+  const handleMoveLoopToWishlist = useCallback(
+    (id: string) => {
+      if (!store) return
+      const item = store.loop.find((l) => l.id === id) ?? store.delayedLoop?.find((l) => l.id === id)
+      if (!item) return
+      const loop = store.loop.filter((l) => l.id !== id)
+      const delayedLoop = (store.delayedLoop ?? []).filter((l) => l.id !== id)
+      // Already in wishlist? Just remove from loop/delayedLoop, don't double-insert.
+      if (store.wishlist.some((w) => w.videoId === item.videoId)) {
+        const interim: PersistedStore = { ...store, loop, delayedLoop }
+        persist({
+          ...interim,
+          todayPlan: recomputePlan(interim, channelBucketByChannelId)
+        })
+        return
+      }
+      const wshId = item.id.startsWith('wsh_')
+        ? item.id
+        : item.id.startsWith('itm_')
+          ? item.id.replace(/^itm_/, 'wsh_')
+          : item.id.startsWith('chn_')
+            ? item.id.replace(/^chn_/, 'wsh_')
+            : `wsh_${item.videoId}`
+      const wshItem: LoopItem = { ...item, id: wshId }
+      const wishlist = [wshItem, ...store.wishlist]
+      const interim: PersistedStore = { ...store, loop, delayedLoop, wishlist }
       persist({
         ...interim,
         todayPlan: recomputePlan(interim, channelBucketByChannelId)
@@ -872,7 +1090,10 @@ export function App() {
   const handleUpdateCategory = useCallback(
     (id: string, patch: Partial<import('./types').Category>) => {
       if (!store) return
-      const categories = store.categories.map((c) => (c.id === id ? { ...c, ...patch } : c))
+      let categories = store.categories.map((c) => (c.id === id ? { ...c, ...patch } : c))
+      if (patch.pinned === true) {
+        categories = categories.map((c) => (c.id === id ? c : { ...c, pinned: false }))
+      }
       const updated: PersistedStore = { ...store, categories }
       persist({
         ...updated,
@@ -887,7 +1108,7 @@ export function App() {
       if (!store) return
       if (store.categories.length <= 1) return // never delete the last one
       const remaining = store.categories.filter((c) => c.id !== id)
-      const fallback = remaining[0].id
+      const fallback = remaining[0]?.id ?? store.categories[0]?.id ?? 'curiosity'
       // Migrate any items/channels using this category to the first remaining one
       const loop = store.loop.map((it) => (it.category === id ? { ...it, category: fallback } : it))
       const channels = store.channels.map((ch) => (ch.category === id ? { ...ch, category: fallback } : ch))
@@ -1014,6 +1235,7 @@ export function App() {
     [store, persist]
   )
 
+
   const handleSubsFetched = useCallback(
     (subs: import('./types').YouTubeSubscription[]) => {
       setStore((prev) => {
@@ -1043,8 +1265,49 @@ export function App() {
   const handleUpdateApiKey = useCallback(
     (key: string) => {
       if (!store) return
-      window.hearth.setApiKey(key)
-      persist({ ...store, youtubeApiKey: key })
+      const youtubeApiKeys = store.youtubeApiKeys ? [...store.youtubeApiKeys] : []
+      if (key && !youtubeApiKeys.includes(key)) {
+        youtubeApiKeys.push(key)
+      }
+      const updated = { ...store, youtubeApiKey: key, youtubeApiKeys }
+      const keys = youtubeApiKeys.length > 0 ? youtubeApiKeys : key ? [key] : []
+      window.hearth.setApiKeys(keys)
+      persist(updated)
+    },
+    [store, persist]
+  )
+
+  const handleUpdateApiKeys = useCallback(
+    (keys: string[]) => {
+      if (!store) return
+      const primary = keys[0] ?? ''
+      const updated = { ...store, youtubeApiKey: primary, youtubeApiKeys: keys }
+      window.hearth.setApiKeys(keys)
+      persist(updated)
+    },
+    [store, persist]
+  )
+
+  const handleUpdateAIConfig = useCallback(
+    (geminiApiKey: string, ollamaUrl: string, ollamaModel: string, feedMemoryProfile: string) => {
+      if (!store) return
+      persist({ ...store, geminiApiKey, ollamaUrl, ollamaModel, feedMemoryProfile })
+    },
+    [store, persist]
+  )
+
+  const handleClearFeedRatings = useCallback(
+    () => {
+      if (!store) return
+      persist({ ...store, feedRatings: [] })
+    },
+    [store, persist]
+  )
+
+  const handleUpdateAppSuggestions = useCallback(
+    (text: string) => {
+      if (!store) return
+      persist({ ...store, appSuggestions: text })
     },
     [store, persist]
   )
@@ -1074,6 +1337,15 @@ export function App() {
     (n: number) => {
       if (!store) return
       const updated: PersistedStore = { ...store, sundayMinutes: n }
+      persist({ ...updated, todayPlan: recomputePlan(updated, channelBucketByChannelId) })
+    },
+    [store, persist, channelBucketByChannelId]
+  )
+
+  const handleUpdateWeekdayMinutes = useCallback(
+    (n: number) => {
+      if (!store) return
+      const updated: PersistedStore = { ...store, weekdayMinutes: n }
       persist({ ...updated, todayPlan: recomputePlan(updated, channelBucketByChannelId) })
     },
     [store, persist, channelBucketByChannelId]
@@ -1121,37 +1393,69 @@ export function App() {
     }
   }, [armSyncWatchdog, clearSyncWatchdog])
 
-  const handleRefreshTodayPlan = useCallback(async () => {
+  // `silent: true` skips the "Syncing today's plan…" pill. Used by day-rollover
+  // so the auto-refresh runs invisibly in the background. Manual Refresh button
+  // presses (no arg or opts.silent = false) still show the pill so the user
+  // gets feedback that their click did something.
+  const handleRefreshTodayPlan = useCallback(async (opts?: { silent?: boolean }) => {
     if (!store) return
-    beginSync()
+    const silent = opts?.silent === true
+    exploreBackfilledCatsRef.current.clear()
+    if (!silent) beginSync()
     try {
       // 1. Refresh channels AND Sunday weekly in parallel — they hit YouTube
       // independently and don't share state. Wall time = max(both) instead
       // of sum, which is what made the rollover sync feel laggy.
       await Promise.all([
         refreshChannelsImpl(store, true),
-        refreshSundayWeekly(store, true)
+        refreshChannelsWeekly(store, true)
       ])
       // 2. After those updates settled, recompute the plan & log lastRefreshAt.
       setStore((prev) => {
         if (!prev) return prev
-        const todayPlan = recomputePlan(prev, channelBucketByChannelId)
+        const migratedStore = moveToDelayedLoop(prev)
+        const todayPlan = recomputePlan(migratedStore, channelBucketByChannelId)
         const nowIso = new Date().toISOString()
         const wkStart = weekStartIso()
-        const isNewWeek = prev.done.weekStart !== wkStart
+        const isNewWeek = migratedStore.done.weekStart !== wkStart
         const updated: PersistedStore = {
-          ...prev,
+          ...migratedStore,
           todayPlan,
           lastRefreshAt: nowIso,
-          done: isNewWeek ? { weekStart: wkStart, items: [] } : prev.done
+          done: isNewWeek ? { weekStart: wkStart, items: [] } : migratedStore.done
         }
         saveStore(updated)
         return updated
       })
     } finally {
-      endSync()
+      if (!silent) endSync()
     }
-  }, [store, channelBucketByChannelId, refreshChannelsImpl, refreshSundayWeekly, beginSync, endSync])
+  }, [store, channelBucketByChannelId, refreshChannelsImpl, refreshChannelsWeekly, beginSync, endSync])
+
+  const handleUpdateActiveCategories = useCallback(
+    (activeCategoryIds: string[]) => {
+      if (!store) return
+      const todayPlan = store.todayPlan
+        ? { ...store.todayPlan, activeCategoryIds }
+        : {
+            date: todayKey(),
+            mode: store.mode,
+            itemIds: [],
+            freshChannelVideoIds: [],
+            parts: [],
+            activeCategoryIds
+          }
+      const updatedStore = {
+        ...store,
+        todayPlan
+      }
+      persist({
+        ...updatedStore,
+        todayPlan: recomputePlan(updatedStore, channelBucketByChannelId)
+      })
+    },
+    [store, persist, channelBucketByChannelId]
+  )
 
   // One-shot duration backfill. Items that came in via channel auto-ingest
   // carry `duration: ''` and no `durationSec`. The day plan packer treats
@@ -1173,6 +1477,7 @@ export function App() {
       try {
         setBackfillRemaining({ done: 0, total: needs.length })
         const updates: Record<string, { duration: string; durationSec: number }> = {}
+        const toDeleteIds = new Set<string>()
         const queue = needs.slice()
         let completed = 0
         const worker = async () => {
@@ -1180,9 +1485,13 @@ export function App() {
             const it = queue.shift()!
             const meta = await window.hearth.fetchVideoMeta(it.videoId)
             if (meta && typeof meta.durationSec === 'number' && meta.durationSec > 0) {
-              updates[it.id] = {
-                duration: meta.duration ?? '',
-                durationSec: meta.durationSec
+              if (meta.durationSec > 5400) {
+                toDeleteIds.add(it.id)
+              } else {
+                updates[it.id] = {
+                  duration: meta.duration ?? '',
+                  durationSec: meta.durationSec
+                }
               }
             }
             completed += 1
@@ -1192,10 +1501,13 @@ export function App() {
           }
         }
         await Promise.all([worker(), worker(), worker(), worker(), worker()])
-        if (cancelled || Object.keys(updates).length === 0) return
+        if (cancelled || (Object.keys(updates).length === 0 && toDeleteIds.size === 0)) return
         setStore((prev) => {
           if (!prev) return prev
-          const loop = prev.loop.map((it) => (updates[it.id] ? { ...it, ...updates[it.id] } : it))
+          let loop = prev.loop.map((it) => (updates[it.id] ? { ...it, ...updates[it.id] } : it))
+          if (toDeleteIds.size > 0) {
+            loop = loop.filter((it) => !toDeleteIds.has(it.id))
+          }
           const interim: PersistedStore = { ...prev, loop }
           const updated: PersistedStore = {
             ...interim,
@@ -1210,6 +1522,106 @@ export function App() {
     })()
     return () => { cancelled = true; setBackfillRemaining(null) }
   }, [store, channelBucketByChannelId])
+
+  // Explore Backfill: If any active category has 0 items in the Spark loop queue for
+  // today's mode, query explore channels in that category for past uploads,
+  // take a random sample of 5 items, and add them to the loop queue to replenish it.
+  //
+  // Tracks which categories we've already attempted to backfill this session so
+  // each empty category triggers AT MOST one fetch. Without this the effect would
+  // re-fire on every setStore (new loop → deps change → next empty cat → fetch →
+  // setStore → …), pinning the CPU and hammering the YouTube API.
+  const exploreBackfilledCatsRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (!store || exploreLoading) return
+    const dow = new Date().getDay()
+    const mode = store.mode
+    const activeCats = store.categories.filter((cat) => categoryAllowedToday(store.categories, cat.id, dow))
+
+    const emptyCat = activeCats.find((cat) => {
+      if (exploreBackfilledCatsRef.current.has(cat.id)) return false
+      const countInLoop = store.loop.filter((it) => it.bucket === mode && it.category === cat.id).length
+      const countInDelayed = (store.delayedLoop ?? []).filter((it) => it.bucket === mode && it.category === cat.id).length
+      const count = countInLoop + countInDelayed
+      return count === 0
+    })
+
+    if (!emptyCat) return
+
+    const exploreChannels = store.channels.filter((ch) => ch.isExplore && ch.category === emptyCat.id)
+    if (exploreChannels.length === 0) {
+      exploreBackfilledCatsRef.current.add(emptyCat.id)
+      return
+    }
+
+    exploreBackfilledCatsRef.current.add(emptyCat.id)
+    let cancelled = false
+    ;(async () => {
+      setExploreLoading(true)
+      try {
+        const ch = exploreChannels[Math.floor(Math.random() * exploreChannels.length)]
+        if (!ch) return
+        const uploadsPlaylistId = 'UU' + ch.channelId.slice(2)
+        const playlistVideos = await window.hearth.fetchPlaylistVideos(uploadsPlaylistId)
+        if (playlistVideos.length === 0) {
+          exploreBackfilledCatsRef.current.delete(emptyCat.id)
+          return
+        }
+        if (cancelled) return
+
+        const existingIds = new Set([
+          ...store.loop.map((v) => v.videoId),
+          ...(store.delayedLoop ?? []).map((v) => v.videoId),
+          ...store.done.items.map((v) => v.videoId),
+          ...(store.trash ?? []).map((t) => t.video?.videoId).filter(Boolean)
+        ])
+
+        const eligible = playlistVideos.filter((v) => !existingIds.has(v.videoId))
+        if (eligible.length === 0) {
+          exploreBackfilledCatsRef.current.delete(emptyCat.id)
+          return
+        }
+
+        const shuffled = [...eligible].sort(() => 0.5 - Math.random())
+        const selected = shuffled.slice(0, 5)
+
+        const newItems: LoopItem[] = selected.map((v) => ({
+          id: 'itm_' + Math.random().toString(36).slice(2, 12),
+          url: `https://www.youtube.com/watch?v=${v.videoId}`,
+          videoId: v.videoId,
+          title: v.title,
+          creator: ch.name,
+          duration: v.duration ?? '',
+          category: emptyCat.id,
+          bucket: mode,
+          addedAt: new Date().toISOString(),
+          paras: [],
+          lastWatchedAt: null,
+          durationSec: undefined, // Let background duration backfill worker fetch this!
+          partsConsumed: 0
+        }))
+
+        if (cancelled) return
+        setStore((prev) => {
+          if (!prev) return prev
+          const loop = [...prev.loop, ...newItems]
+          const interim = { ...prev, loop }
+          const updated = {
+            ...interim,
+            todayPlan: recomputePlan(interim, channelBucketByChannelId)
+          }
+          saveStore(updated)
+          return updated
+        })
+      } catch (err) {
+        console.error('Explore backfill failed:', err)
+        exploreBackfilledCatsRef.current.delete(emptyCat.id)
+      } finally {
+        if (!cancelled) setExploreLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [store, exploreLoading, channelBucketByChannelId])
 
   // Day-rollover detection. On first load, if the calendar date has changed
   // since the last logged sync, trigger a full refresh (channels + Sunday
@@ -1226,7 +1638,7 @@ export function App() {
       return
     }
     rolloverCheckedRef.current = true
-    handleRefreshTodayPlan()
+    handleRefreshTodayPlan({ silent: true })
   }, [store, handleRefreshTodayPlan])
 
   const handleRestoreFromQuarantine = useCallback(
@@ -1309,11 +1721,12 @@ export function App() {
   const handleSkipFromToday = useCallback(
     (itemId: string) => {
       if (!store) return
-      const item = store.loop.find((it) => it.id === itemId)
+      const item = store.loop.find((it) => it.id === itemId) ?? store.delayedLoop?.find((it) => it.id === itemId)
       if (!item) return
 
-      // Move skipped item out of loop into this week's done bucket.
+      // Move skipped item out of loop/delayedLoop into this week's done bucket.
       const loop = store.loop.filter((it) => it.id !== itemId)
+      const delayedLoop = (store.delayedLoop ?? []).filter((it) => it.id !== itemId)
       const done = {
         weekStart: store.done.weekStart,
         items: [
@@ -1321,31 +1734,59 @@ export function App() {
           ...store.done.items.filter((d) => d.id !== itemId)
         ]
       }
-      const interim: PersistedStore = { ...store, loop, done }
+      const interim: PersistedStore = { ...store, loop, delayedLoop, done }
 
       const currentParts = store.todayPlan?.parts ?? []
-      const skippedIdx = currentParts.findIndex((p) => p.itemId === itemId)
-      const keptParts = currentParts.filter((p) => p.itemId !== itemId)
+      const currentEntParts = store.todayPlan?.entertainmentParts ?? []
 
-      // Mine a fresh plan for a replacement that isn't already on screen.
-      const fresh = recomputePlan(interim, channelBucketByChannelId)
-      const keptItemIds = new Set(keptParts.map((p) => p.itemId))
-      const replacement = (fresh.parts ?? []).find((p) => !keptItemIds.has(p.itemId))
+      const isEnt = currentEntParts.some((p) => p.itemId === itemId)
 
-      const newParts = replacement
-        ? [
-            ...keptParts.slice(0, skippedIdx),
-            replacement,
-            ...keptParts.slice(skippedIdx)
-          ]
-        : keptParts
+      let newParts = currentParts
+      let newEntParts = currentEntParts
+
+      if (isEnt) {
+        // Handle entertainment skip
+        const skippedIdx = currentEntParts.findIndex((p) => p.itemId === itemId)
+        const keptParts = currentEntParts.filter((p) => p.itemId !== itemId)
+
+        // Mine a fresh plan to find a replacement entertainment item
+        const fresh = recomputePlan(interim, channelBucketByChannelId)
+        const keptItemIds = new Set(keptParts.map((p) => p.itemId))
+        const replacement = (fresh.entertainmentParts ?? []).find((p) => !keptItemIds.has(p.itemId))
+
+        newEntParts = replacement
+          ? [
+              ...keptParts.slice(0, skippedIdx),
+              replacement,
+              ...keptParts.slice(skippedIdx)
+            ]
+          : keptParts
+      } else {
+        // Handle normal study skip
+        const skippedIdx = currentParts.findIndex((p) => p.itemId === itemId)
+        const keptParts = currentParts.filter((p) => p.itemId !== itemId)
+
+        // Mine a fresh plan for a replacement study item that isn't already on screen
+        const fresh = recomputePlan(interim, channelBucketByChannelId)
+        const keptItemIds = new Set(keptParts.map((p) => p.itemId))
+        const replacement = (fresh.parts ?? []).find((p) => !keptItemIds.has(p.itemId))
+
+        newParts = replacement
+          ? [
+              ...keptParts.slice(0, skippedIdx),
+              replacement,
+              ...keptParts.slice(skippedIdx)
+            ]
+          : keptParts
+      }
 
       const newPlan: import('./types').DayPlan = {
         date: store.todayPlan?.date ?? todayKey(),
         mode: store.todayPlan?.mode ?? store.mode,
         itemIds: Array.from(new Set(newParts.map((p) => p.itemId))),
         freshChannelVideoIds: store.todayPlan?.freshChannelVideoIds ?? [],
-        parts: newParts
+        parts: newParts,
+        entertainmentParts: newEntParts
       }
 
       persist({ ...interim, todayPlan: newPlan })
@@ -1489,7 +1930,7 @@ export function App() {
   const handleRefreshChannels = useCallback(() => {
     if (!store) return
     refreshChannelsImpl(store, true)
-    refreshSundayWeekly(store, true)
+    refreshChannelsWeekly(store, true)
   }, [store, refreshChannelsImpl])
 
   const handleUpdateFocus = useCallback(
@@ -1503,39 +1944,37 @@ export function App() {
   const handleClearAll = useCallback(() => {
     if (!store) return
     persist({
-      schemaVersion: store.schemaVersion,
+      ...store,
       mode: autoMode(),
       loop: [],
+      delayedLoop: [],
       todayPlan: null,
       courses: [],
-      categoryQuotas: store.categoryQuotas,
       activeCourseId: null,
       watched: [],
       watchedByCourse: {},
       channels: [],
       channelFresh: {},
-      focusConfig: store.focusConfig,
-      dailySessions: { date: todayKey(), courseSessionsCompleted: 0, totalSessionsCompleted: 0, courseSessionsByCategory: {} },
+      dailySessions: { date: todayKey(), courseSessionsCompleted: 0, totalSessionsCompleted: 0, courseSessionsByCategory: {}, courseSessionsByCourse: {} },
       routine: [],
       routineDoneByDay: {},
-      googleAuth: store.googleAuth,
-      youtubeApiKey: store.youtubeApiKey,
-      sundayLimit: store.sundayLimit,
       playlistVideosCache: {},
       youtubeSubscriptionsCache: null,
-      categories: store.categories,
       sundayChannelWeekly: {},
       progress: {},
-      sliceTargetMin: store.sliceTargetMin ?? 30,
-      sundayMinutes: store.sundayMinutes ?? 90,
       shortsQuarantine: [],
-      remarkable: store.remarkable ?? { paired: false },
       done: { weekStart: weekStartIso(), items: [] },
       lastRefreshAt: undefined,
       playlistNotes: {},
-      courseCategories: store.courseCategories,
       activeCourseByCategory: {},
-      wishlist: []
+      wishlist: [],
+      trash: [],
+      bookmarks: [],
+      courseStreaks: {},
+      sparks: [],
+      exploreTopics: [],
+      interests: [],
+      dailySynthesis: {}
     })
     setScreen('today')
   }, [store, persist])
@@ -1641,19 +2080,26 @@ export function App() {
     return () => window.removeEventListener('message', onMessage)
   }, [flushProgress])
 
-  // Handshake with iframes after they mount.
+  // Handshake with iframes periodically while we are on a player/study screen
+  // to ensure that any slow-loading iframe gets hooked up immediately.
   useEffect(() => {
     if (screen !== 'player' && screen !== 'courseFocus' && screen !== 'noteStudy') {
       setVideoPlaying(false)
       return
     }
-    const t1 = window.setTimeout(() => startListeningToIframes(), 600)
-    const t2 = window.setTimeout(() => startListeningToIframes(), 2000)
+    
+    // Broadcast handshake immediately
+    startListeningToIframes()
+    
+    // Broadcast handshake every 500ms to handle lazy loading or video swaps fluidly
+    const pollId = window.setInterval(() => {
+      startListeningToIframes()
+    }, 500)
+    
     return () => {
-      window.clearTimeout(t1)
-      window.clearTimeout(t2)
+      window.clearInterval(pollId)
     }
-  }, [screen, activeItem, activeCourseFocusId])
+  }, [screen, activeItem?.id, activeCourseFocusId, activeCourseFocusVideoId])
 
   // Poll currentTime every 5s while playing, and flush progress to disk every
   // 10s. Also flush on unmount (player close / video change).
@@ -1673,36 +2119,21 @@ export function App() {
 
   // ============ Focus timer (only ticks while videoPlaying) ============
 
-  // Reset elapsed only when the *context* genuinely changes to a different one.
-  // Leaving CourseFocus and returning to the same course preserves the timer,
-  // so an accidental back-click doesn't cost you 30 minutes of focus.
-  const lastFocusContextRef = useRef<string | null>(null)
-  useEffect(() => {
-    const newContext = activeItem
-      ? `v:${activeItem.id}`
-      : activeCourseFocusId
-      ? `c:${activeCourseFocusId}`
-      : null
-    if (newContext && newContext !== lastFocusContextRef.current) {
-      setFocusElapsedSec(0)
-    }
-    if (newContext) lastFocusContextRef.current = newContext
-  }, [activeItem?.id, activeCourseFocusId])
-
-  // Format the visible timer label: "MM:SS left"
+  // Format the visible timer label: "MM:SS left" or "MM:SS (0.5x)" or "MM:SS paused"
   const focusTimerLabel = useMemo<string | null>(() => {
     if (!store?.focusConfig.enabled) return null
     if (screen !== 'player' && screen !== 'courseFocus') return null
     const total = store.focusConfig.focusMinutes * 60
-    const remaining = Math.max(0, total - focusElapsedSec)
+    const remaining = Math.max(0, total - Math.floor(currentElapsedSec))
     const m = Math.floor(remaining / 60)
     const s = remaining % 60
     const time = `${m}:${String(s).padStart(2, '0')}`
-    return videoPlaying ? `${time} left` : `${time} paused`
-  }, [focusElapsedSec, store?.focusConfig.enabled, store?.focusConfig.focusMinutes, screen, videoPlaying])
+    if (focusTimerManuallyPaused) return `${time} paused`
+    return videoPlaying ? `${time} left` : `${time} (0.5x)`
+  }, [currentElapsedSec, store?.focusConfig.enabled, store?.focusConfig.focusMinutes, screen, videoPlaying, focusTimerManuallyPaused])
 
   const triggerBreak = useCallback(
-    (isCourse: boolean, categoryId?: string) => {
+    (isCourse: boolean, categoryId?: string, courseId?: string) => {
       if (!store) return
       postPauseToAllIframes()
       setBreakDurationSec(store.focusConfig.breakMinutes * 60)
@@ -1713,13 +2144,18 @@ export function App() {
       if (isCourse && categoryId) {
         categorySessions[categoryId] = (categorySessions[categoryId] ?? 0) + 1
       }
+      const courseSessions = { ...(ds.courseSessionsByCourse ?? {}) }
+      if (isCourse && courseId) {
+        courseSessions[courseId] = (courseSessions[courseId] ?? 0) + 1
+      }
       persist({
         ...store,
         dailySessions: {
           date: today,
           totalSessionsCompleted: ds.totalSessionsCompleted + 1,
           courseSessionsCompleted: ds.courseSessionsCompleted + (isCourse ? 1 : 0),
-          courseSessionsByCategory: categorySessions
+          courseSessionsByCategory: categorySessions,
+          courseSessionsByCourse: courseSessions
         }
       })
     },
@@ -1733,25 +2169,31 @@ export function App() {
       return
     }
     focusContextRef.current = screen === 'courseFocus' ? 'course' : 'video'
-    if (!videoPlaying) return
+    if (focusTimerManuallyPaused) return
 
     const focusSec = (store?.focusConfig.focusMinutes ?? 40) * 60
+    const activeCourseId = activeCourseFocusId
     const activeCourseCat = activeCourseFocusId
       ? store?.courses.find((c) => c.id === activeCourseFocusId)?.category || '__uncategorized__'
       : undefined
 
     const id = window.setInterval(() => {
-      setFocusElapsedSec((cur) => {
-        const next = cur + 1
+      if (!activeFocusContext) return
+      setFocusElapsedByContext((prev) => {
+        const cur = prev[activeFocusContext] ?? 0
+        // When video is playing, timer advances 1 sec per sec.
+        // When video is paused, timer advances 0.5 sec per sec (1 sec in 2 sec).
+        const step = videoPlaying ? 1 : 0.5
+        const next = cur + step
         if (next >= focusSec) {
-          triggerBreak(focusContextRef.current === 'course', activeCourseCat)
-          return 0
+          triggerBreak(focusContextRef.current === 'course', activeCourseCat, activeCourseId || undefined)
+          return { ...prev, [activeFocusContext]: 0 }
         }
-        return next
+        return { ...prev, [activeFocusContext]: next }
       })
     }, 1000)
     return () => window.clearInterval(id)
-  }, [videoPlaying, screen, onBreak, store?.focusConfig.enabled, store?.focusConfig.focusMinutes, activeCourseFocusId, store?.courses, triggerBreak])
+  }, [videoPlaying, focusTimerManuallyPaused, screen, onBreak, store?.focusConfig.enabled, store?.focusConfig.focusMinutes, activeFocusContext, activeCourseFocusId, store?.courses, triggerBreak])
 
   const endBreak = useCallback(() => {
     setOnBreak(false)
@@ -1764,7 +2206,7 @@ export function App() {
   // ones that landed in done.
   const todayItems = useMemo<LoopItem[]>(() => {
     if (!store || !store.todayPlan) return []
-    const combined = [...store.loop, ...store.done.items]
+    const combined = [...store.loop, ...(store.delayedLoop ?? []), ...store.done.items]
     return itemsForPlan(store.todayPlan, combined)
   }, [store])
 
@@ -1773,7 +2215,7 @@ export function App() {
   // tile keeps rendering even after the item moves into done.items.
   const entertainmentItems = useMemo<LoopItem[]>(() => {
     if (!store || !store.todayPlan?.entertainmentParts) return []
-    const combined = [...store.loop, ...store.done.items]
+    const combined = [...store.loop, ...(store.delayedLoop ?? []), ...store.done.items]
     const byId = new Map(combined.map((i) => [i.id, i]))
     const out: LoopItem[] = []
     for (const p of store.todayPlan.entertainmentParts) {
@@ -1791,7 +2233,7 @@ export function App() {
     if (!store) return []
     const out: LoopItem[] = []
     // Top-level items.
-    for (const it of [...store.loop, ...store.done.items]) {
+    for (const it of [...store.loop, ...(store.delayedLoop ?? []), ...store.done.items]) {
       if (!it.note) continue
       const watchedOnce =
         it.lastWatchedAt !== null ||
@@ -1803,7 +2245,8 @@ export function App() {
     // Playlist notes — synthesize a row per playlist video that has a note
     // AND has been marked watched in its course.
     for (const [key, pn] of Object.entries(store.playlistNotes)) {
-      const [courseId] = key.split(':')
+      const courseId = key.split(':')[0]
+      if (!courseId) continue
       const watched = (store.watchedByCourse[courseId] ?? []).includes(pn.videoId)
       const playerCompleted = store.progress[pn.videoId]?.completed === true
       if (!watched && !playerCompleted) continue
@@ -1836,25 +2279,34 @@ export function App() {
       locked: boolean
     }[] = []
     const acbc = store.activeCourseByCategory
-    // Build the effective active-course map: explicit entries win, otherwise
-    // the first course in each category is the default-active.
-    const effective: Record<string, string> = { ...acbc }
+    
+    const effective: Record<string, string> = {}
     for (const cat of store.courseCategories) {
-      if (effective[cat.id]) continue
-      const firstInCat = store.courses.find((c) => c.category === cat.id)
-      if (firstInCat) effective[cat.id] = firstInCat.id
+      const active = acbc[cat.id]
+      if (active === '__none__') continue
+      if (active) {
+        effective[cat.id] = active
+      } else {
+        const firstInCat = store.courses.find((c) => c.category === cat.id)
+        if (firstInCat) effective[cat.id] = firstInCat.id
+      }
     }
-    // Also surface the uncategorized bucket if it has courses.
-    if (!effective['__uncategorized__']) {
-      const firstUncat = store.courses.find((c) => !c.category)
-      if (firstUncat) effective['__uncategorized__'] = firstUncat.id
+    
+    const uncatActive = acbc['__uncategorized__']
+    if (uncatActive !== '__none__') {
+      if (uncatActive) {
+        effective['__uncategorized__'] = uncatActive
+      } else {
+        const firstUncat = store.courses.find((c) => !c.category)
+        if (firstUncat) effective['__uncategorized__'] = firstUncat.id
+      }
     }
     for (const [catId, courseId] of Object.entries(effective)) {
       const course = store.courses.find((c) => c.id === courseId)
       if (!course) continue
       const cat = store.courseCategories.find((c) => c.id === catId)
-      const completed = store.dailySessions?.courseSessionsByCategory?.[catId] ?? 0
-      const limit = store.focusConfig.courseSessionLimit ?? 4
+      const completed = store.dailySessions?.courseSessionsByCourse?.[courseId] ?? 0
+      const limit = course.sessionLimit ?? cat?.sessionLimit ?? store.focusConfig.courseSessionLimit ?? 4
       result.push({
         course,
         categoryName: cat?.name ?? 'Uncategorized',
@@ -1877,7 +2329,7 @@ export function App() {
   const totalBudgetMin = useMemo(() => {
     if (!store) return 0
     if (store.mode === 'SUN') return store.sundayMinutes ?? 0
-    return store.categories.reduce((acc, c) => acc + (c.minutesPerDay ?? 0), 0)
+    return store.weekdayMinutes ?? 60
   }, [store])
 
   const courseWatchedSet = useMemo(() => {
@@ -1888,9 +2340,14 @@ export function App() {
   const courseSessionsToday = store?.dailySessions?.courseSessionsCompleted ?? 0
   const courseSessionLimit = store?.focusConfig.courseSessionLimit ?? 4
   const courseLocked = activeCourses.length > 0 && activeCourses.every((c) => c.locked)
-  const activeCourseCat = courseFocusCourse?.category || '__uncategorized__'
-  const categorySessionsToday = store?.dailySessions?.courseSessionsByCategory?.[activeCourseCat] ?? 0
-  const isCurrentCourseLocked = categorySessionsToday >= courseSessionLimit
+
+  const isCurrentCourseLocked = useMemo(() => {
+    if (!store || !courseFocusCourse) return false
+    const completed = store.dailySessions?.courseSessionsByCourse?.[courseFocusCourse.id] ?? 0
+    const cat = store.courseCategories.find(c => c.id === courseFocusCourse.category)
+    const limit = courseFocusCourse.sessionLimit ?? cat?.sessionLimit ?? courseSessionLimit
+    return completed >= limit
+  }, [store, courseFocusCourse, courseSessionLimit])
 
   const routineDoneTodaySet = useMemo(() => {
     if (!store) return new Set<string>()
@@ -1968,6 +2425,9 @@ export function App() {
           onGoNotes={() => setScreen('notes')}
           onGoWishlist={() => setScreen('wishlist')}
           onGoEntertainment={() => setScreen('entertainment')}
+          onGoSparks={() => setScreen('sparks')}
+          onGoFeed={() => setScreen('feed')}
+          onGoSearch={() => setScreen('search')}
         />
         <div className="body">
           {screen === 'today' && (
@@ -1986,6 +2446,8 @@ export function App() {
               courseSessionsToday={courseSessionsToday}
               courseSessionLimit={courseSessionLimit}
               categories={store.categories}
+              activeCategoryIds={store.todayPlan?.activeCategoryIds}
+              onUpdateActiveCategories={handleUpdateActiveCategories}
               onOpen={(it) => {
                 setActiveItem(it)
                 setScreen('player')
@@ -1998,13 +2460,19 @@ export function App() {
               onSkipFromToday={handleSkipFromToday}
               onRefreshPlan={handleRefreshTodayPlan}
               syncing={syncing}
+              store={store}
+              sparks={store.sparks ?? []}
+              exploreTopics={store.exploreTopics ?? []}
+              interests={store.interests ?? []}
+              dailySynthesis={store.dailySynthesis ?? {}}
+              onUpdateStore={(next) => persist(next)}
             />
           )}
           {/*
             Sunday now uses the same Today card-grid as weekdays — the bucket
             (SUN vs WKDY) controls which loop items are eligible, not the
             layout. Channel weekly uploads still auto-ingest as real LoopItems
-            via refreshSundayWeekly, so they show up in the day plan directly
+            via refreshChannelsWeekly, so they show up in the day plan directly
             instead of needing a separate "Harvest" surface.
           */}
 
@@ -2033,6 +2501,8 @@ export function App() {
                 isFavorited={store.wishlist.some(w => w.videoId === activeItem.videoId)}
                 isWatched={store.watched.includes(activeItem.id)}
                 focusTimerLabel={focusTimerLabel}
+                isFocusTimerManuallyPaused={focusTimerManuallyPaused}
+                onToggleFocusTimerPause={() => setFocusTimerManuallyPaused((prev) => !prev)}
                 startSec={startSec}
                 endSec={partEnd}
                 partLabel={partLabel}
@@ -2051,14 +2521,20 @@ export function App() {
                     if (!prev) return prev
                     const isFresh = activeItem.id.startsWith('fresh_')
                     const existing = prev.progress[activeItem.videoId]
+                    
                     const inLoop = prev.loop.find((it) => it.id === activeItem.id)
-                    const newPartsConsumed = todayPart && inLoop
-                      ? Math.min(todayPart.partCount, (inLoop.partsConsumed ?? 0) + 1)
+                    const inDelayed = prev.delayedLoop?.find((it) => it.id === activeItem.id)
+                    const currentItem = inLoop || inDelayed
+
+                    const newPartsConsumed = todayPart && currentItem
+                      ? Math.min(todayPart.partCount, (currentItem.partsConsumed ?? 0) + 1)
                       : 1
                     const fullyDone = !todayPart || newPartsConsumed >= (todayPart?.partCount ?? 1)
 
                     let loop = prev.loop
+                    let delayedLoop = prev.delayedLoop ?? []
                     let done = prev.done
+
                     if (inLoop) {
                       if (fullyDone) {
                         loop = prev.loop.filter((it) => it.id !== activeItem.id)
@@ -2078,7 +2554,27 @@ export function App() {
                             : it
                         )
                       }
+                    } else if (inDelayed) {
+                      if (fullyDone) {
+                        delayedLoop = delayedLoop.filter((it) => it.id !== activeItem.id)
+                        const movedItem: LoopItem = {
+                          ...inDelayed,
+                          partsConsumed: newPartsConsumed,
+                          lastWatchedAt: new Date().toISOString()
+                        }
+                        done = {
+                          weekStart: prev.done.weekStart,
+                          items: [movedItem, ...prev.done.items.filter((d) => d.id !== activeItem.id)]
+                        }
+                      } else {
+                        delayedLoop = delayedLoop.map((it) =>
+                          it.id === activeItem.id
+                            ? { ...it, partsConsumed: newPartsConsumed, lastWatchedAt: new Date().toISOString() }
+                            : it
+                        )
+                      }
                     }
+
                     // Fold markWatchedNow's effect in here so there's a single
                     // atomic write. Skip for fresh_* (channel-fresh) items.
                     const watched = isFresh || prev.watched.includes(activeItem.id)
@@ -2088,6 +2584,7 @@ export function App() {
                     const updated: PersistedStore = {
                       ...prev,
                       loop,
+                      delayedLoop,
                       done,
                       watched,
                       progress: {
@@ -2125,7 +2622,10 @@ export function App() {
               course={courseFocusCourse}
               watchedIds={courseWatchedSet}
               cachedVideos={store.playlistVideosCache[courseFocusCourse.playlistId]?.videos ?? null}
+              cacheFetchedAt={store.playlistVideosCache[courseFocusCourse.playlistId]?.fetchedAt ?? null}
               focusTimerLabel={focusTimerLabel}
+              isFocusTimerManuallyPaused={focusTimerManuallyPaused}
+              onToggleFocusTimerPause={() => setFocusTimerManuallyPaused((prev) => !prev)}
               progress={store.progress}
               playlistNotes={store.playlistNotes}
               onAttachNoteToPlaylistVideo={(videoId, videoTitle) => {
@@ -2164,6 +2664,7 @@ export function App() {
               onUnmarkWatched={(vid) => handleMarkCourseVideoWatched(courseFocusCourse.id, vid, false)}
               onVideosFetched={handlePlaylistVideosFetched}
               onSetOrder={(order, manualOrder) => handleSetCourseOrder(courseFocusCourse.id, order, manualOrder)}
+              onActiveVideoChange={setActiveCourseFocusVideoId}
               onBack={() => {
                 setActiveCourseFocusId(null)
                 setScreen('courses')
@@ -2187,6 +2688,7 @@ export function App() {
               courses={store.courses}
               courseCategories={store.courseCategories}
               activeCourseByCategory={store.activeCourseByCategory}
+              courseSessionLimit={courseSessionLimit}
               courseStreaks={store.courseStreaks}
               onAdd={handleSaveCourse}
               onRemove={handleRemoveCourse}
@@ -2220,12 +2722,15 @@ export function App() {
               onRecategorize={handleRecategorize}
               onSetItemBucket={handleSetItemBucket}
               onDeleteVideo={handleDeleteVideo}
+              onMoveToWishlist={handleMoveLoopToWishlist}
               onClearAll={handleClearAll}
               onAddChannel={handleAddChannel}
               onImportChannels={handleImportChannels}
               onRemoveChannel={handleRemoveChannel}
               onSetChannelBucket={handleSetChannelBucket}
               onSetChannelCategory={handleSetChannelCategory}
+              onSetChannelExplore={handleSetChannelExplore}
+              onSetChannelPlaylistRate={handleSetChannelPlaylistRate}
               onRefreshChannels={handleRefreshChannels}
               onUpdateFocus={handleUpdateFocus}
               onAddRoutine={handleAddRoutine}
@@ -2233,12 +2738,17 @@ export function App() {
               onUpdateGoogleAuth={handleUpdateGoogleAuth}
               onSubsFetched={handleSubsFetched}
               onUpdateApiKey={handleUpdateApiKey}
+              onUpdateApiKeys={handleUpdateApiKeys}
+              onUpdateAIConfig={handleUpdateAIConfig}
+              onClearFeedRatings={handleClearFeedRatings}
+              onUpdateAppSuggestions={handleUpdateAppSuggestions}
               onUpdateSundayLimit={handleUpdateSundayLimit}
               onAddCategory={handleAddCategory}
               onUpdateCategory={handleUpdateCategory}
               onDeleteCategory={handleDeleteCategory}
               onUpdateSliceTargetMin={handleUpdateSliceTargetMin}
               onUpdateSundayMinutes={handleUpdateSundayMinutes}
+              onUpdateWeekdayMinutes={handleUpdateWeekdayMinutes}
               onRefreshTodayPlan={handleRefreshTodayPlan}
               onRestoreFromQuarantine={handleRestoreFromQuarantine}
               onDeleteFromQuarantine={handleDeleteFromQuarantine}
@@ -2316,6 +2826,41 @@ export function App() {
             />
           )}
 
+          {screen === 'feed' && (
+            <Feed
+              store={store}
+              onUpdateStore={persist}
+              onOpenVideo={(item) => {
+                setActiveItem(item)
+                setScreen('player')
+              }}
+              onRefreshChannels={handleRefreshChannels}
+              onBack={() => setScreen('today')}
+            />
+          )}
+
+          {screen === 'search' && (
+            <Search
+              store={store}
+              onUpdateStore={persist}
+              onOpenVideo={(item) => {
+                setActiveItem(item)
+                setScreen('player')
+              }}
+              onBack={() => setScreen('today')}
+            />
+          )}
+
+          {screen === 'sparks' && (
+            <SparksScreen
+              sparks={store.sparks ?? []}
+              categories={store.categories}
+              onDelete={handleDeleteSpark}
+              onTriggerCapture={() => setSparkCaptureOpen(true)}
+              onBack={() => setScreen('today')}
+            />
+          )}
+
           {screen === 'entertainment' && (
             <Entertainment
               items={entertainmentItems}
@@ -2348,6 +2893,18 @@ export function App() {
               onSaveWishlist={handleSaveToWishlist}
             />
           )}
+
+          <SparkCaptureSheet
+            open={sparkCaptureOpen}
+            categories={store.categories}
+            sourceVideoId={
+              (screen === 'player' && activeItem?.videoId) ||
+              (screen === 'courseFocus' && courseFocusCourse?.singleVideo?.videoId) ||
+              undefined
+            }
+            onClose={() => setSparkCaptureOpen(false)}
+            onSave={handleSaveSpark}
+          />
 
           {attachNoteFor && (
             <AttachNoteModal

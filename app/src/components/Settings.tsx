@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { Bucket, CategoryId, Channel, FocusConfig, GoogleAuth, LoopItem, PersistedStore, RoutineItem } from '../types'
 import { DEFAULT_CATEGORIES, COLOR_SWATCHES, dotShadowFor, makeCategoryMap } from '../lib/categories'
 import { parseYouTubeUrl, shortLabelForUrl } from '../lib/youtube'
@@ -12,12 +12,15 @@ interface Props {
   onRecategorize: (id: string, cat: CategoryId) => void
   onSetItemBucket: (id: string, bucket: Bucket) => void
   onDeleteVideo: (id: string) => void
+  onMoveToWishlist: (id: string) => void
   onClearAll: () => void
   onAddChannel: (channel: Channel) => void
   onImportChannels: (channels: Channel[]) => void
   onRemoveChannel: (id: string) => void
   onSetChannelBucket: (id: string, bucket: Bucket) => void
   onSetChannelCategory: (id: string, cat: CategoryId) => void
+  onSetChannelExplore: (id: string, isExplore: boolean) => void
+  onSetChannelPlaylistRate: (id: string, rate: number) => void
   onRefreshChannels: () => void
   onUpdateFocus: (cfg: FocusConfig) => void
   onAddRoutine: (item: RoutineItem) => void
@@ -25,12 +28,14 @@ interface Props {
   onUpdateGoogleAuth: (next: GoogleAuth) => void
   onSubsFetched: (subs: import('../types').YouTubeSubscription[]) => void
   onUpdateApiKey: (key: string) => void
+  onUpdateApiKeys: (keys: string[]) => void
   onUpdateSundayLimit: (n: number) => void
   onAddCategory: (cat: import('../types').Category) => void
   onUpdateCategory: (id: string, patch: Partial<import('../types').Category>) => void
   onDeleteCategory: (id: string) => void
   onUpdateSliceTargetMin: (n: number) => void
   onUpdateSundayMinutes: (n: number) => void
+  onUpdateWeekdayMinutes: (n: number) => void
   onRefreshTodayPlan: () => void
   onRestoreFromQuarantine: (id: string) => void
   onDeleteFromQuarantine: (id: string) => void
@@ -41,9 +46,12 @@ interface Props {
   onEmptyTrash: () => void
   onRemoveBookmark: (id: string) => void
   onBack: () => void
+  onUpdateAIConfig: (geminiApiKey: string, ollamaUrl: string, ollamaModel: string, feedMemoryProfile: string) => void
+  onClearFeedRatings: () => void
+  onUpdateAppSuggestions: (text: string) => void
 }
 
-type Tab = 'categories' | 'videos' | 'channels' | 'routine' | 'google' | 'focus' | 'general' | 'done' | 'trash' | 'bookmarks'
+type Tab = 'categories' | 'videos' | 'channels' | 'routine' | 'google' | 'focus' | 'general' | 'done' | 'trash' | 'bookmarks' | 'ai' | 'suggestions'
 
 function BucketPicker({
   value,
@@ -65,12 +73,14 @@ function VideoRow({
   categories,
   onRecategorize,
   onSetItemBucket,
+  onMoveToWishlist,
   onDelete
 }: {
   item: LoopItem
   categories: import('../types').Category[]
   onRecategorize: (id: string, cat: CategoryId) => void
   onSetItemBucket: (id: string, bucket: Bucket) => void
+  onMoveToWishlist: (id: string) => void
   onDelete: (id: string) => void
 }) {
   const catMap = makeCategoryMap(categories.length > 0 ? categories : DEFAULT_CATEGORIES)
@@ -105,6 +115,15 @@ function VideoRow({
           ))}
         </select>
       )}
+      <button
+        className="heart-btn"
+        onClick={() => onMoveToWishlist(item.id)}
+        title="Move to Wishlist"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z" />
+        </svg>
+      </button>
       <button className="x-btn" onClick={() => onDelete(item.id)} title="Delete">
         <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
           <path d="M18 6L6 18M6 6l12 12" />
@@ -121,12 +140,15 @@ export function Settings(props: Props) {
     onRecategorize,
     onSetItemBucket,
     onDeleteVideo,
+    onMoveToWishlist,
     onClearAll,
     onAddChannel,
     onImportChannels,
     onRemoveChannel,
     onSetChannelBucket,
     onSetChannelCategory,
+    onSetChannelExplore,
+    onSetChannelPlaylistRate,
     onRefreshChannels,
     onUpdateFocus,
     onAddRoutine,
@@ -134,12 +156,14 @@ export function Settings(props: Props) {
     onUpdateGoogleAuth,
     onSubsFetched,
     onUpdateApiKey,
+    onUpdateApiKeys,
     onUpdateSundayLimit,
     onAddCategory,
     onUpdateCategory,
     onDeleteCategory,
     onUpdateSliceTargetMin,
     onUpdateSundayMinutes,
+    onUpdateWeekdayMinutes,
     onRefreshTodayPlan,
     onRestoreFromQuarantine,
     onDeleteFromQuarantine,
@@ -149,7 +173,10 @@ export function Settings(props: Props) {
     onPurgeFromTrash,
     onEmptyTrash,
     onRemoveBookmark,
-    onBack
+    onBack,
+    onUpdateAIConfig,
+    onClearFeedRatings,
+    onUpdateAppSuggestions
   } = props
 
   const [tab, setTab] = useState<Tab>('categories')
@@ -159,6 +186,19 @@ export function Settings(props: Props) {
   const [channelCategory, setChannelCategory] = useState<CategoryId>('curiosity')
   const [resolving, setResolving] = useState(false)
   const [resolveError, setResolveError] = useState('')
+
+  const [geminiKey, setGeminiKey] = useState(store.geminiApiKey ?? '')
+  const [ollamaUrlVal, setOllamaUrlVal] = useState(store.ollamaUrl ?? 'http://localhost:11434')
+  const [ollamaModelVal, setOllamaModelVal] = useState(store.ollamaModel ?? 'gemma4:e2b')
+  const [memoryProfile, setMemoryProfile] = useState(store.feedMemoryProfile ?? 'The user\'s preferences are not yet known.')
+  const [savedNotice, setSavedNotice] = useState(false)
+
+  useEffect(() => {
+    setGeminiKey(store.geminiApiKey ?? '')
+    setOllamaUrlVal(store.ollamaUrl ?? 'http://localhost:11434')
+    setOllamaModelVal(store.ollamaModel ?? 'gemma4:e2b')
+    setMemoryProfile(store.feedMemoryProfile ?? 'The user\'s preferences are not yet known.')
+  }, [store.geminiApiKey, store.ollamaUrl, store.ollamaModel, store.feedMemoryProfile])
 
   const [editingCatId, setEditingCatId] = useState<string | null>(null)
   const [newCatName, setNewCatName] = useState('')
@@ -177,7 +217,7 @@ export function Settings(props: Props) {
   const [routineFetching, setRoutineFetching] = useState(false)
   const [routineError, setRoutineError] = useState('')
 
-  const [apiKeyInput, setApiKeyInput] = useState(store.youtubeApiKey ?? '')
+  const [apiKeyInput, setApiKeyInput] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
   const [apiKeySaved, setApiKeySaved] = useState(false)
 
@@ -231,10 +271,39 @@ export function Settings(props: Props) {
     const raw = channelInput.trim()
     if (!raw) return
     setResolving(true)
+
+    const parsed = parseYouTubeUrl(raw)
+    if (parsed && parsed.kind === 'playlist') {
+      const meta = await window.hearth.fetchPlaylistMeta(parsed.id)
+      const videos = await window.hearth.fetchPlaylistVideos(parsed.id)
+      setResolving(false)
+      if (!meta || videos.length === 0) {
+        setResolveError("Couldn't resolve that playlist. Please make sure the URL is public or unlisted.")
+        return
+      }
+      const ch: Channel = {
+        id: newId('chn_'),
+        handle: '',
+        channelId: parsed.id,
+        name: `${meta.title}`,
+        bucket: channelBucket,
+        category: channelCategory,
+        addedAt: new Date().toISOString(),
+        isPlaylistChannel: true,
+        playlistId: parsed.id,
+        playlistVideos: videos,
+        releasedVideoIds: [],
+        videosPerWeek: 2
+      }
+      onAddChannel(ch)
+      setChannelInput('')
+      return
+    }
+
     const meta = await window.hearth.resolveChannel(raw)
     setResolving(false)
     if (!meta) {
-      setResolveError("Couldn't find that channel. Paste a UC... channel ID or an @handle from the channel's URL.")
+      setResolveError("Couldn't find that channel. Paste a UC... channel ID, @handle, or a playlist URL to track it passively.")
       return
     }
     const ch: Channel = {
@@ -286,6 +355,33 @@ export function Settings(props: Props) {
     setRoutineCreator('')
   }
 
+  const handleSaveAI = () => {
+    onUpdateAIConfig(geminiKey.trim(), ollamaUrlVal.trim(), ollamaModelVal.trim(), memoryProfile.trim())
+    setSavedNotice(true)
+    setTimeout(() => setSavedNotice(false), 2000)
+  }
+
+  const handleResetMemory = () => {
+    const defaultMem = 'The user\'s preferences are not yet known.'
+    setMemoryProfile(defaultMem)
+    onUpdateAIConfig(geminiKey.trim(), ollamaUrlVal.trim(), ollamaModelVal.trim(), defaultMem)
+    setSavedNotice(true)
+    setTimeout(() => setSavedNotice(false), 2000)
+  }
+
+  const [suggestionsText, setSuggestionsText] = useState(store.appSuggestions ?? '')
+  const [suggestionsNotice, setSuggestionsNotice] = useState(false)
+
+  useEffect(() => {
+    setSuggestionsText(store.appSuggestions ?? '')
+  }, [store.appSuggestions])
+
+  const handleSaveSuggestions = () => {
+    onUpdateAppSuggestions(suggestionsText)
+    setSuggestionsNotice(true)
+    setTimeout(() => setSuggestionsNotice(false), 2000)
+  }
+
   const weekdayVideos = store.loop.filter((it) => it.bucket === 'WKDY')
   const sundayVideos = store.loop.filter((it) => it.bucket === 'SUN')
 
@@ -306,14 +402,27 @@ export function Settings(props: Props) {
           <button className={tab === 'bookmarks' ? 'active' : ''} onClick={() => setTab('bookmarks')}>Bookmarks</button>
           <button className={tab === 'trash' ? 'active' : ''} onClick={() => setTab('trash')}>Trash</button>
           <button className={tab === 'general' ? 'active' : ''} onClick={() => setTab('general')}>General</button>
+          <button className={tab === 'ai' ? 'active' : ''} onClick={() => setTab('ai')}>AI</button>
+          <button className={tab === 'suggestions' ? 'active' : ''} onClick={() => setTab('suggestions')}>Suggestions</button>
         </div>
 
         {tab === 'categories' && (
           <div className="settings-pane">
             <p className="page-lede" style={{ margin: '0 0 6px' }}>
-              Your Spark content is sorted into categories. Each gets an independent daily quota and a color.
+              Your Spark content is sorted into categories, selected cyclically up to your overall daily target.
             </p>
-            <div className="quota-total">Daily total: <strong>{total}</strong> items</div>
+            <div className="daily-target-row" style={{ display: 'flex', alignItems: 'center', marginBottom: '20px', marginTop: '10px', gap: '12px' }}>
+              <span style={{ fontSize: '15px', color: 'var(--ink)' }}>Daily Target Duration:</span>
+              <button
+                className="qty-btn"
+                onClick={() => onUpdateWeekdayMinutes(Math.max(5, store.weekdayMinutes - 5))}
+              >−</button>
+              <span className="qty-val" style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--ink)' }}>{store.weekdayMinutes} min</span>
+              <button
+                className="qty-btn"
+                onClick={() => onUpdateWeekdayMinutes(Math.min(240, store.weekdayMinutes + 5))}
+              >+</button>
+            </div>
 
             {store.categories.map((c) => {
               const usedBy = store.loop.filter((it) => it.category === c.id).length
@@ -339,18 +448,28 @@ export function Settings(props: Props) {
                   ) : (
                     <div className="cat-name" onClick={() => setEditingCatId(c.id)} title="Click to rename">{c.name}</div>
                   )}
-                  <div className="qty">
-                    <span className="qty-label">Min/day</span>
-                    <button
-                      className="qty-btn"
-                      onClick={() => onUpdateCategory(c.id, { minutesPerDay: Math.max(0, (c.minutesPerDay ?? 0) - 5) })}
-                    >−</button>
-                    <span className="qty-val">{c.minutesPerDay ?? 0}</span>
-                    <button
-                      className="qty-btn"
-                      onClick={() => onUpdateCategory(c.id, { minutesPerDay: Math.min(240, (c.minutesPerDay ?? 0) + 5) })}
-                    >+</button>
-                  </div>
+                  <button
+                    className={`set-active-btn${c.pinned ? ' active' : ''}`}
+                    onClick={() => {
+                      onUpdateCategory(c.id, { pinned: !c.pinned })
+                    }}
+                    style={{
+                      padding: '3px 8px',
+                      fontSize: '11px',
+                      borderRadius: '4px',
+                      border: '1px solid var(--hairline)',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      background: c.pinned ? 'var(--ember-tint)' : 'var(--card)',
+                      borderColor: c.pinned ? 'var(--ember)' : 'var(--hairline)',
+                      color: c.pinned ? 'var(--ember-ink)' : 'var(--ink-soft)'
+                    }}
+                    title={c.pinned ? "Pinned to daily loop (has priority daily)" : "Pin to daily loop"}
+                  >
+                    📌 {c.pinned ? 'Pinned' : 'Pin'}
+                  </button>
                   <button
                     className="x-btn"
                     disabled={store.categories.length <= 1}
@@ -540,7 +659,7 @@ export function Settings(props: Props) {
               ) : (
                 <>
                   <p className="ingest-hint" style={{ marginBottom: 8 }}>
-                    Go to <a href="https://my.remarkable.com/device/desktop/connect" target="_blank" rel="noreferrer">my.remarkable.com/device/desktop/connect</a> and paste the 8-character code below.
+                    Go to <a href="#" onClick={(e) => { e.preventDefault(); window.hearth.openInBrowser("https://my.remarkable.com/device/desktop/connect"); }} style={{ color: 'var(--ember)', cursor: 'pointer' }}>my.remarkable.com/device/desktop/connect</a> and paste the 8-character code below.
                   </p>
                   <div className="ingest-row">
                     <input
@@ -624,9 +743,13 @@ export function Settings(props: Props) {
         {tab === 'videos' && (
           <div className="settings-pane">
             <p className="page-lede" style={{ margin: '0 0 16px' }}>
-              {store.loop.length === 0
+              {store.loop.length === 0 && (!store.delayedLoop || store.delayedLoop.length === 0)
                 ? 'Nothing in the loop yet. Press Ctrl+I to ingest.'
-                : `${store.loop.length} video${store.loop.length === 1 ? '' : 's'} in your loop. Grouped by bucket.`}
+                : `${store.loop.length} video${store.loop.length === 1 ? '' : 's'} in loop` +
+                  (store.delayedLoop && store.delayedLoop.length > 0
+                    ? ` (${store.delayedLoop.length} delayed)`
+                    : '') +
+                  '. Grouped by bucket.'}
             </p>
 
             <div className="bucket-section">
@@ -644,6 +767,7 @@ export function Settings(props: Props) {
                     categories={store.categories}
                     onRecategorize={onRecategorize}
                     onSetItemBucket={onSetItemBucket}
+                    onMoveToWishlist={onMoveToWishlist}
                     onDelete={onDeleteVideo}
                   />
                 ))
@@ -665,11 +789,32 @@ export function Settings(props: Props) {
                     categories={store.categories}
                     onRecategorize={onRecategorize}
                     onSetItemBucket={onSetItemBucket}
+                    onMoveToWishlist={onMoveToWishlist}
                     onDelete={onDeleteVideo}
                   />
                 ))
               )}
             </div>
+
+            {store.delayedLoop && store.delayedLoop.length > 0 && (
+              <div className="bucket-section" style={{ marginTop: '24px' }}>
+                <div className="bucket-section-head" style={{ borderBottomColor: 'var(--amber)' }}>
+                  <h3 style={{ color: 'var(--amber)' }}>Delayed Loop</h3>
+                  <span className="bucket-section-count" style={{ background: 'var(--amber)', color: '#000' }}>{store.delayedLoop.length}</span>
+                </div>
+                {store.delayedLoop.map((item) => (
+                  <VideoRow
+                    key={item.id}
+                    item={item}
+                    categories={store.categories}
+                    onRecategorize={onRecategorize}
+                    onSetItemBucket={onSetItemBucket}
+                    onMoveToWishlist={onMoveToWishlist}
+                    onDelete={onDeleteVideo}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -758,10 +903,16 @@ export function Settings(props: Props) {
                       </div>
                       <h3 className="card-title">{ch.name}</h3>
                       <div className="card-meta">
-                        {ch.handle && <span className="creator">@{ch.handle}</span>}
-                        <span className="url" title={ch.channelId}>{ch.channelId.slice(0, 18)}…</span>
+                        {ch.isPlaylistChannel ? (
+                          <span className="creator" style={{ color: 'var(--ember)', fontWeight: 600 }}>Passive Playlist</span>
+                        ) : (
+                          <>
+                            {ch.handle && <span className="creator">@{ch.handle}</span>}
+                            <span className="url" title={ch.channelId}>{ch.channelId.slice(0, 18)}…</span>
+                          </>
+                        )}
                       </div>
-                      {fresh && (
+                      {fresh && !ch.isPlaylistChannel && (
                         <div
                           style={{
                             marginTop: 10,
@@ -802,7 +953,36 @@ export function Settings(props: Props) {
                             ))}
                           </select>
                         )}
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--ink-subtle)', cursor: 'pointer', userSelect: 'none' }}>
+                          <input
+                            type="checkbox"
+                            checked={ch.isExplore === true}
+                            onChange={(e) => onSetChannelExplore(ch.id, e.target.checked)}
+                            style={{ margin: 0, width: 13, height: 13 }}
+                          />
+                          <span>Explore (Past)</span>
+                        </label>
                       </div>
+                      {ch.isPlaylistChannel && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', fontSize: 11, color: 'var(--ink-soft)', marginTop: 8, borderTop: '1px solid var(--hairline)', paddingTop: 8 }}>
+                          <span>Release rate:</span>
+                          <select
+                            className="cat-select"
+                            value={ch.videosPerWeek ?? 2}
+                            onChange={(e) => onSetChannelPlaylistRate(ch.id, parseInt(e.target.value))}
+                            title="Number of videos to release per week randomly"
+                            style={{ fontSize: 11, padding: '2px 4px' }}
+                          >
+                            <option value={1}>1 video / week</option>
+                            <option value={2}>2 videos / week</option>
+                            <option value={3}>3 videos / week</option>
+                            <option value={4}>4 videos / week</option>
+                          </select>
+                          <span style={{ color: 'var(--ink-faint)', marginLeft: 'auto' }}>
+                            {(ch.playlistVideos?.length ?? 0)} left / {((ch.playlistVideos?.length ?? 0) + (ch.releasedVideoIds?.length ?? 0))} total
+                          </span>
+                        </div>
+                      )}
                     </div>
                   )
                 }
@@ -1127,26 +1307,50 @@ export function Settings(props: Props) {
             <div className="info-row"><span className="info-key">Sessions today</span><span className="info-val">{store.dailySessions?.totalSessionsCompleted ?? 0} (course: {store.dailySessions?.courseSessionsCompleted ?? 0})</span></div>
             <div className="info-row"><span className="info-key">Data file</span><span className="info-val mono">%APPDATA%\com.hearthcellar.app\config.json</span></div>
 
-            <div className="info-row" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 8, padding: '14px 0' }}>
+            <div className="info-row" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 8, padding: '14px 0', borderBottom: '1px solid var(--border-soft)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
-                <span className="info-key">YouTube API Key</span>
-                {store.youtubeApiKey && (
-                  <span style={{
-                    fontSize: 10.5,
-                    fontFamily: 'var(--mono)',
-                    color: 'oklch(0.62 0.15 145)',
-                    background: 'oklch(0.62 0.15 145 / 0.1)',
-                    padding: '2px 6px',
-                    borderRadius: 4
-                  }}>active</span>
-                )}
+                <span className="info-key">YouTube API Keys</span>
+                <span style={{
+                  fontSize: 10.5,
+                  fontFamily: 'var(--mono)',
+                  color: 'oklch(0.62 0.15 145)',
+                  background: 'oklch(0.62 0.15 145 / 0.1)',
+                  padding: '2px 6px',
+                  borderRadius: 4
+                }}>{(store.youtubeApiKeys ?? []).length} active</span>
               </div>
-              <div style={{ display: 'flex', gap: 8, width: '100%' }}>
+
+              {/* List of active keys */}
+              {(store.youtubeApiKeys ?? []).map((key, idx) => (
+                <div key={idx} style={{ display: 'flex', gap: 8, width: '100%', alignItems: 'center' }}>
+                  <input
+                    className="ingest-input text"
+                    type="password"
+                    readOnly
+                    value={key}
+                    style={{ flex: 1, fontFamily: 'var(--mono)', fontSize: 11, opacity: 0.7, background: 'var(--bg-card)' }}
+                  />
+                  <button
+                    className="ingest-save"
+                    onClick={() => {
+                      const nextKeys = (store.youtubeApiKeys ?? []).filter((_, i) => i !== idx)
+                      onUpdateApiKeys(nextKeys)
+                    }}
+                    style={{ background: 'none', border: '1px solid var(--border-soft)', color: 'var(--ember)', padding: '0 12px', fontSize: 12 }}
+                    title="Remove API Key"
+                  >
+                    Delete
+                  </button>
+                </div>
+              ))}
+
+              {/* Add Key input field */}
+              <div style={{ display: 'flex', gap: 8, width: '100%', marginTop: 4 }}>
                 <div style={{ position: 'relative', flex: 1 }}>
                   <input
                     className="ingest-input text"
                     type={showApiKey ? 'text' : 'password'}
-                    placeholder="AIza..."
+                    placeholder="Paste new YouTube API Key..."
                     value={apiKeyInput}
                     onChange={(e) => { setApiKeyInput(e.target.value); setApiKeySaved(false) }}
                     style={{ width: '100%', paddingRight: 36, fontFamily: 'var(--mono)', fontSize: 12 }}
@@ -1173,24 +1377,31 @@ export function Settings(props: Props) {
                 </div>
                 <button
                   className="ingest-save"
-                  disabled={apiKeyInput === store.youtubeApiKey}
+                  disabled={!apiKeyInput.trim()}
                   onClick={() => {
-                    onUpdateApiKey(apiKeyInput.trim())
-                    setApiKeySaved(true)
-                    setTimeout(() => setApiKeySaved(false), 2000)
+                    const newKey = apiKeyInput.trim()
+                    if (newKey && !(store.youtubeApiKeys ?? []).includes(newKey)) {
+                      onUpdateApiKeys([...(store.youtubeApiKeys ?? []), newKey])
+                      setApiKeySaved(true)
+                      setTimeout(() => setApiKeySaved(false), 2000)
+                    }
+                    setApiKeyInput('')
                   }}
                 >
-                  {apiKeySaved ? '✓ Saved' : 'Save'}
+                  {apiKeySaved ? '✓ Added' : 'Add'}
                 </button>
               </div>
+
               <div style={{ fontSize: 11.5, color: 'var(--ink-faint)', lineHeight: 1.45 }}>
-                Enables reliable playlist loading via the official YouTube Data API.
+                Enables reliable playlist loading. Adding multiple keys from different Google accounts will automatically rotate requests sequentially to bypass individual API quota limits.
                 Get a free key from{' '}
                 <a
-                  href="https://console.cloud.google.com/apis/library/youtube.googleapis.com"
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ color: 'var(--ember)' }}
+                  href="#"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    window.hearth.openInBrowser("https://console.cloud.google.com/apis/library/youtube.googleapis.com");
+                  }}
+                  style={{ color: 'var(--ember)', cursor: 'pointer' }}
                 >
                   Google Cloud Console
                 </a>
@@ -1208,6 +1419,229 @@ export function Settings(props: Props) {
                   <button className="danger-btn cancel" onClick={() => setConfirmingClear(false)}>Cancel</button>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {tab === 'ai' && (
+          <div className="settings-pane">
+            <p className="page-lede" style={{ margin: '0 0 16px' }}>
+              Configure the API keys and models that power your AI search recommendations and Titans test-time memory.
+            </p>
+
+            <div className="settings-group" style={{ marginBottom: 20 }}>
+              <div className="info-key" style={{ fontWeight: 600, fontSize: 14, marginBottom: 8, display: 'block' }}>Gemini API Key</div>
+              <div style={{ display: 'flex', gap: 8, width: '100%', alignItems: 'center' }}>
+                <input
+                  className="ingest-input text"
+                  type="password"
+                  placeholder="Enter your Gemini API key..."
+                  value={geminiKey}
+                  onChange={(e) => setGeminiKey(e.target.value)}
+                  style={{ flex: 1, fontFamily: 'var(--mono)', fontSize: 12 }}
+                />
+              </div>
+              <div style={{ fontSize: 11.5, color: 'var(--ink-faint)', marginTop: 4 }}>
+                Used to generate high-quality video recommendations based on your query topic. Get a free key from{' '}
+                <a
+                  href="#"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    window.hearth.openInBrowser("https://aistudio.google.com/app/apikey");
+                  }}
+                  style={{ color: 'var(--ember)', cursor: 'pointer' }}
+                >
+                  Google AI Studio
+                </a>.
+              </div>
+            </div>
+
+            <div className="settings-group" style={{ marginBottom: 20 }}>
+              <div className="info-key" style={{ fontWeight: 600, fontSize: 14, marginBottom: 8, display: 'block' }}>Ollama Configuration (Local/Cloud)</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ fontSize: 11, color: 'var(--ink-faint)', display: 'block', marginBottom: 4 }}>Ollama Endpoint URL</label>
+                    <input
+                      className="ingest-input text"
+                      type="text"
+                      placeholder="e.g. http://localhost:11434"
+                      value={ollamaUrlVal}
+                      onChange={(e) => setOllamaUrlVal(e.target.value)}
+                      style={{ width: '100%', fontFamily: 'var(--mono)', fontSize: 12 }}
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ fontSize: 11, color: 'var(--ink-faint)', display: 'block', marginBottom: 4 }}>Ollama Model Name</label>
+                    <input
+                      className="ingest-input text"
+                      type="text"
+                      placeholder="e.g. gemma4:e2b"
+                      value={ollamaModelVal}
+                      onChange={(e) => setOllamaModelVal(e.target.value)}
+                      style={{ width: '100%', fontFamily: 'var(--mono)', fontSize: 12 }}
+                    />
+                  </div>
+                </div>
+              </div>
+              <div style={{ fontSize: 11.5, color: 'var(--ink-faint)', marginTop: 4 }}>
+                Used to dynamically evaluate video transcripts and continuously update your Taste Profile.
+              </div>
+            </div>
+
+            <div className="settings-group" style={{ marginBottom: 20 }}>
+              <div className="info-key" style={{ fontWeight: 600, fontSize: 14, marginBottom: 8, display: 'block' }}>Titans Taste Memory Profile</div>
+              <p style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '4px 0 8px' }}>
+                This profile represents the "memory weights" of your taste, continuously updated by Ollama when you rate videos. You can also manually edit it below.
+              </p>
+              <textarea
+                className="ingest-input text"
+                rows={8}
+                value={memoryProfile}
+                onChange={(e) => setMemoryProfile(e.target.value)}
+                style={{
+                  width: '100%',
+                  fontFamily: 'var(--serif)',
+                  fontSize: 13.5,
+                  lineHeight: 1.5,
+                  padding: 12,
+                  resize: 'vertical',
+                  background: 'var(--bg-card)',
+                  color: 'var(--ink)'
+                }}
+              />
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <button className="ingest-save" onClick={handleSaveAI}>
+                  {savedNotice ? '✓ Saved Configurations' : 'Save AI Settings'}
+                </button>
+                <button
+                  className="ingest-save"
+                  onClick={handleResetMemory}
+                  style={{ background: 'none', border: '1px solid var(--border-soft)', color: 'var(--ink-soft)' }}
+                >
+                  Reset Taste Profile
+                </button>
+              </div>
+            </div>
+
+            <div className="settings-group" style={{ marginTop: 24, borderTop: '1px solid var(--hairline-soft)', paddingTop: 20 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <div className="info-key" style={{ margin: 0, fontWeight: 600, fontSize: 14 }}>Taste Ratings History ({(store.feedRatings ?? []).length} rated)</div>
+                {(store.feedRatings ?? []).length > 0 && (
+                  <button
+                    className="danger-btn"
+                    onClick={() => {
+                      if (confirm("Are you sure you want to clear your entire ratings history? This will reset the AI's understanding of your tastes.")) {
+                        onClearFeedRatings();
+                      }
+                    }}
+                    style={{ padding: '4px 10px', fontSize: 11.5 }}
+                  >
+                    Clear History
+                  </button>
+                )}
+              </div>
+
+              {(store.feedRatings ?? []).length === 0 ? (
+                <div style={{ padding: '16px', background: 'var(--bg-card)', borderRadius: 8, textAlign: 'center', color: 'var(--ink-faint)', fontSize: 12.5 }}>
+                  No rated videos yet. Rate videos in the AI Search screen to train your model!
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 220, overflowY: 'auto', paddingRight: 4 }}>
+                  {(store.feedRatings ?? []).map((r, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '8px 12px',
+                        background: 'var(--bg-card)',
+                        border: '1px solid var(--hairline-soft)',
+                        borderRadius: 8
+                      }}
+                    >
+                      <div style={{ minWidth: 0, flex: 1, marginRight: 16 }}>
+                        <div style={{ fontWeight: 500, fontSize: 12.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.title}</div>
+                        <div style={{ fontSize: 11, color: 'var(--ink-faint)', marginTop: 2 }}>{r.creator} · {new Date(r.timestamp).toLocaleDateString()}</div>
+                      </div>
+                      <span
+                        style={{
+                          fontSize: 10.5,
+                          fontWeight: 600,
+                          textTransform: 'uppercase',
+                          padding: '3px 8px',
+                          borderRadius: 4,
+                          background: r.rating === 'love' ? 'rgba(52, 199, 89, 0.12)' : 'rgba(255, 59, 48, 0.12)',
+                          color: r.rating === 'love' ? '#34c759' : '#ff3b30'
+                        }}
+                      >
+                        {r.rating === 'love' ? 'Love' : 'Hate'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {tab === 'suggestions' && (
+          <div className="settings-pane">
+            <p className="page-lede" style={{ margin: '0 0 16px' }}>
+              Have an idea, feedback, or a feature request for Hearth & Cellar? Jot it down here. Antigravity AI will automatically read your notes and prioritize them in our next coding session.
+            </p>
+
+            <div className="settings-group" style={{ marginBottom: 20 }}>
+              <div className="info-key" style={{ fontWeight: 600, fontSize: 14, marginBottom: 8, display: 'block' }}>App Ideas & Suggestions</div>
+              <textarea
+                className="ingest-input text"
+                rows={12}
+                placeholder="Type your feature requests, bugs to fix, or architectural ideas here..."
+                value={suggestionsText}
+                onChange={(e) => setSuggestionsText(e.target.value)}
+                style={{
+                  width: '100%',
+                  fontFamily: 'var(--serif)',
+                  fontSize: 14,
+                  lineHeight: 1.6,
+                  padding: 14,
+                  resize: 'vertical',
+                  background: 'var(--bg-card)',
+                  color: 'var(--ink)',
+                  border: '1px solid var(--border-soft)',
+                  borderRadius: 8,
+                  outline: 'none',
+                  transition: 'border-color 0.2s ease, box-shadow 0.2s ease'
+                }}
+              />
+              <div style={{ display: 'flex', gap: 12, marginTop: 12, alignItems: 'center' }}>
+                <button 
+                  className="ingest-save" 
+                  onClick={handleSaveSuggestions}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '8px 16px',
+                    fontSize: 13,
+                    fontWeight: 500,
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                    background: 'var(--ember)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 6
+                  }}
+                >
+                  {suggestionsNotice ? '✓ Saved Suggestions' : 'Save Suggestions'}
+                </button>
+                {suggestionsNotice && (
+                  <span style={{ fontSize: 12.5, color: 'var(--ink-soft)', animation: 'fadeIn 0.3s ease' }}>
+                    Saved to config.json
+                  </span>
+                )}
+              </div>
             </div>
           </div>
         )}

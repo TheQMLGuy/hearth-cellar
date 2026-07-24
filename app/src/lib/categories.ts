@@ -42,10 +42,11 @@ export function dotShadowFor(color: string): string {
 }
 
 export function lookupCategory(categories: Category[], id: CategoryId): Category {
-  return (
-    categories.find((c) => c.id === id) ??
-    DEFAULT_CATEGORIES[0]
-  )
+  const found = categories.find((c) => c.id === id)
+  if (found) return found
+  const def = DEFAULT_CATEGORIES[0]
+  if (def) return def
+  throw new Error("Default category not found")
 }
 
 export function makeCategoryMap(categories: Category[]): Record<CategoryId, Category> {

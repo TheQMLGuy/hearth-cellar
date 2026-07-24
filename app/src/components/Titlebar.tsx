@@ -12,10 +12,13 @@ interface Props {
   onGoNotes: () => void
   onGoWishlist: () => void
   onGoEntertainment: () => void
+  onGoSparks: () => void
+  onGoFeed: () => void
+  onGoSearch: () => void
 }
 
 export function Titlebar(props: Props) {
-  const { mode, screen, onToggleIngest, onGoToday, onGoCourses, onGoRoutine, onGoSettings, onGoNotes, onGoWishlist, onGoEntertainment } = props
+  const { mode, screen, onToggleIngest, onGoToday, onGoCourses, onGoRoutine, onGoSettings, onGoNotes, onGoWishlist, onGoEntertainment, onGoSparks, onGoFeed, onGoSearch } = props
   void mode
   const inCourses = screen === 'courses' || screen === 'courseFocus'
   const inRoutine = screen === 'routine'
@@ -23,7 +26,10 @@ export function Titlebar(props: Props) {
   const inNotes = screen === 'notes'
   const inWishlist = screen === 'wishlist'
   const inEntertainment = screen === 'entertainment'
+  const inSparks = screen === 'sparks'
   const inToday = screen === 'today'
+  const inFeed = screen === 'feed'
+  const inSearch = screen === 'search'
 
   return (
     <div className="titlebar" data-tauri-drag-region>
@@ -58,6 +64,18 @@ export function Titlebar(props: Props) {
             Routine
           </button>
           <button
+            className={inFeed ? 'seg active' : 'seg'}
+            onClick={onGoFeed}
+          >
+            Feed
+          </button>
+          <button
+            className={inSearch ? 'seg active' : 'seg'}
+            onClick={onGoSearch}
+          >
+            Search
+          </button>
+          <button
             className={inCourses ? 'seg active' : 'seg'}
             onClick={onGoCourses}
           >
@@ -74,6 +92,13 @@ export function Titlebar(props: Props) {
             onClick={onGoNotes}
           >
             Notes
+          </button>
+          <button
+            className={inSparks ? 'seg active' : 'seg'}
+            onClick={onGoSparks}
+            title="Sparks — capture ideas (Ctrl+S)"
+          >
+            Sparks
           </button>
           <button
             className={inWishlist ? 'seg active' : 'seg'}

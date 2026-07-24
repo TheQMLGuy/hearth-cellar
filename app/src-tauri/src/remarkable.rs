@@ -94,6 +94,14 @@ struct UserTokenCache {
 
 static USER_TOKEN: Mutex<Option<UserTokenCache>> = Mutex::new(None);
 static AUTH_PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
+static CACHE_PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RmCache {
+    #[serde(rename = "lastSync")]
+    pub last_sync: String,
+    pub docs: Vec<RmDoc>,
+}
 
 /// Called from the Tauri setup hook so we know where the app's config dir is.
 pub fn init_storage(app: &tauri::AppHandle) {
@@ -102,6 +110,33 @@ pub fn init_storage(app: &tauri::AppHandle) {
             let _ = std::fs::create_dir_all(&dir);
             *path = Some(dir.join("remarkable.json"));
         }
+    }
+    if let Ok(mut path) = CACHE_PATH.lock() {
+        if let Ok(dir) = app.path().app_config_dir() {
+            *path = Some(dir.join("remarkable_cache.json"));
+        }
+    }
+}
+
+fn cache_path() -> Option<std::path::PathBuf> {
+    CACHE_PATH.lock().ok().and_then(|p| p.clone())
+}
+
+fn load_cache() -> Option<RmCache> {
+    let path = cache_path()?;
+    let bytes = std::fs::read(&path).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn save_cache(cache: &RmCache) -> Result<(), String> {
+    let path = cache_path().ok_or_else(|| "cache path not initialised".to_string())?;
+    let bytes = serde_json::to_vec(cache).map_err(|e| format!("serialize cache: {}", e))?;
+    std::fs::write(&path, bytes).map_err(|e| format!("write cache: {}", e))
+}
+
+fn clear_cache() {
+    if let Some(path) = cache_path() {
+        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -286,13 +321,17 @@ pub fn rm_pair(code: String) -> Result<(), String> {
 #[tauri::command]
 pub fn rm_unpair() -> Result<(), String> {
     clear_device_token();
+    clear_cache();
     Ok(())
 }
 
 #[tauri::command]
 pub fn rm_status() -> RmStatus {
     let paired = load_device_token().is_some();
-    RmStatus { paired, last_sync: None, doc_count: 0 }
+    let cache = load_cache();
+    let last_sync = cache.as_ref().map(|c| c.last_sync.clone());
+    let doc_count = cache.as_ref().map(|c| c.docs.len() as u32).unwrap_or(0);
+    RmStatus { paired, last_sync, doc_count }
 }
 
 /// Decode the user-id segment from a JWT payload. Doesn't verify the signature
@@ -594,13 +633,20 @@ fn fetch_documents_from(host_root_url: &str, files_base: &str, token: &str) -> R
 /// network I/O actually runs. Without this, six 8s probes (worst case) keep
 /// a Tauri command-pool worker busy and the UI feels frozen.
 #[tauri::command]
-pub async fn rm_list_docs() -> Result<Vec<RmDoc>, String> {
-    tauri::async_runtime::spawn_blocking(rm_list_docs_sync)
+pub async fn rm_list_docs(force_refresh: Option<bool>) -> Result<Vec<RmDoc>, String> {
+    tauri::async_runtime::spawn_blocking(move || rm_list_docs_sync(force_refresh))
         .await
         .map_err(|e| format!("join: {}", e))?
 }
 
-fn rm_list_docs_sync() -> Result<Vec<RmDoc>, String> {
+fn rm_list_docs_sync(force_refresh: Option<bool>) -> Result<Vec<RmDoc>, String> {
+    let force = force_refresh.unwrap_or(false);
+    if !force {
+        if let Some(cache) = load_cache() {
+            return Ok(cache.docs);
+        }
+    }
+
     let token = current_user_token()?;
     // Sync v4 root → v3 files walk (rmapi-js canonical flow). Try EU host
     // first, US fallback. Legacy v2/discovery only as a last-ditch attempt
@@ -635,7 +681,7 @@ fn rm_list_docs_sync() -> Result<Vec<RmDoc>, String> {
             }
         }
     };
-    Ok(items
+    let docs: Vec<RmDoc> = items
         .into_iter()
         .map(|it| RmDoc {
             uuid: it.id,
@@ -644,12 +690,22 @@ fn rm_list_docs_sync() -> Result<Vec<RmDoc>, String> {
             doc_type: it.item_type,
             last_modified: it.modified_client.unwrap_or_default(),
         })
-        .collect())
+        .collect();
+
+    // Cache the documents list
+    let now = chrono::Utc::now().to_rfc3339();
+    let cache = RmCache {
+        last_sync: now,
+        docs: docs.clone(),
+    };
+    let _ = save_cache(&cache);
+
+    Ok(docs)
 }
 
 #[tauri::command]
 pub async fn rm_doc_meta(uuid: String) -> Result<Option<RmDoc>, String> {
-    let docs = tauri::async_runtime::spawn_blocking(rm_list_docs_sync)
+    let docs = tauri::async_runtime::spawn_blocking(move || rm_list_docs_sync(None))
         .await
         .map_err(|e| format!("join: {}", e))??;
     Ok(docs.into_iter().find(|d| d.uuid == uuid))

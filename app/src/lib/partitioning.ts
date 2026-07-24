@@ -20,27 +20,21 @@ export function itemDurationSec(item: LoopItem): number {
 export function splitIntoParts(item: LoopItem, sliceTargetSec: number): Part[] {
   const total = itemDurationSec(item)
   if (total <= 0) {
-    // No duration metadata — present as a single full-video part. Use a
-    // 10-minute placeholder for budget accounting so the packer doesn't fill
-    // a category with unlimited unknown-duration videos.
     return [{ itemId: item.id, partIdx: 0, partCount: 1, startSec: 0, endSec: 600 }]
   }
   if (total <= sliceTargetSec * SOLO_TOLERANCE) {
     return [{ itemId: item.id, partIdx: 0, partCount: 1, startSec: 0, endSec: total }]
   }
-
-  const partsFromChapters = item.chapters && item.chapters.length >= 3
+  const segments = item.chapters && item.chapters.length >= 3
     ? splitByChapters(item.chapters, total, sliceTargetSec)
-    : null
-  const raw = partsFromChapters ?? splitEvenly(total, sliceTargetSec)
+    : splitEvenly(total, sliceTargetSec)
 
-  const partCount = raw.length
-  return raw.map((segment, idx) => ({
+  return segments.map((seg, idx) => ({
     itemId: item.id,
     partIdx: idx,
-    partCount,
-    startSec: segment.start,
-    endSec: segment.end
+    partCount: segments.length,
+    startSec: seg.start,
+    endSec: seg.end
   }))
 }
 
@@ -69,8 +63,11 @@ function splitByChapters(chapters: Chapter[], total: number, target: number): Ra
   let currentStart = chapters[0]?.startSec ?? 0
 
   for (let i = 0; i < chapters.length; i++) {
-    const chStart = chapters[i].startSec
-    const chEnd = i + 1 < chapters.length ? chapters[i + 1].startSec : total
+    const ch = chapters[i]
+    if (!ch) continue
+    const chStart = ch.startSec
+    const nextCh = chapters[i + 1]
+    const chEnd = nextCh ? nextCh.startSec : total
     const chLen = chEnd - chStart
 
     if (chLen > maxPartLen) {

@@ -5,6 +5,16 @@ export type YouTubeRef =
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/
 const PLAYLIST_ID_RE = /^[A-Za-z0-9_-]{13,}$/
 
+export function cleanPlaylistId(id: string): string {
+  if (id.startsWith('VL') && id.length > 2) {
+    const candidate = id.slice(2)
+    if (PLAYLIST_ID_RE.test(candidate)) {
+      return candidate
+    }
+  }
+  return id
+}
+
 export function parseYouTubeUrl(input: string): YouTubeRef | null {
   const raw = input.trim()
   if (!raw) return null
@@ -21,12 +31,14 @@ export function parseYouTubeUrl(input: string): YouTubeRef | null {
   const host = u.hostname.replace(/^www\./, '')
 
   if (host === 'youtu.be') {
-    const id = u.pathname.replace(/^\//, '').split('/')[0]
-    return VIDEO_ID_RE.test(id) ? { kind: 'video', id } : null
+    const id = u.pathname.replace(/^\//, '').split('/')[0] ?? ''
+    return id && VIDEO_ID_RE.test(id) ? { kind: 'video', id } : null
   }
 
   if (host === 'youtube.com' || host === 'm.youtube.com' || host === 'youtube-nocookie.com') {
-    const list = u.searchParams.get('list')
+    const listRaw = u.searchParams.get('list')
+    const list = listRaw ? cleanPlaylistId(listRaw) : null
+
     if (u.pathname === '/playlist' && list && PLAYLIST_ID_RE.test(list)) {
       return { kind: 'playlist', id: list }
     }
@@ -37,7 +49,18 @@ export function parseYouTubeUrl(input: string): YouTubeRef | null {
       const v = u.searchParams.get('v') ?? ''
       if (VIDEO_ID_RE.test(v)) return { kind: 'video', id: v }
     }
+    if (u.pathname.startsWith('/show/')) {
+      const id = u.pathname.split('/')[2] ?? ''
+      const cleaned = cleanPlaylistId(id)
+      if (PLAYLIST_ID_RE.test(cleaned)) {
+        return { kind: 'playlist', id: cleaned }
+      }
+    }
     if (u.pathname.startsWith('/shorts/')) {
+      const id = u.pathname.split('/')[2] ?? ''
+      if (VIDEO_ID_RE.test(id)) return { kind: 'video', id }
+    }
+    if (u.pathname.startsWith('/live/')) {
       const id = u.pathname.split('/')[2] ?? ''
       if (VIDEO_ID_RE.test(id)) return { kind: 'video', id }
     }

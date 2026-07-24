@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 
 interface Props {
   totalSeconds: number
@@ -94,13 +94,37 @@ const EXERCISES: { title: string; cue: string; svg: (frame: number) => JSX.Eleme
 ]
 
 export function BreakOverlay({ totalSeconds, onSkip, onComplete }: Props) {
-  const [secondsLeft, setSecondsLeft] = useState(totalSeconds)
+  const [phase, setPhase] = useState<'stretch_video' | 'eye_video' | 'stretch'>('stretch_video')
+  const [playbackRate, setPlaybackRate] = useState(1.5)
+  const [isPlaying, setIsPlaying] = useState(true)
+  const [isMuted, setIsMuted] = useState(false)
+  const [videoDuration, setVideoDuration] = useState(0)
+  const [videoProgress, setVideoProgress] = useState(0)
+  const [stretchSecondsLeft, setStretchSecondsLeft] = useState(120)
   const [frame, setFrame] = useState(0)
-  const [exerciseIdx, setExerciseIdx] = useState(0)
 
+  const videoRef = useRef<HTMLVideoElement>(null)
+
+  const isVideo = phase === 'stretch_video' || phase === 'eye_video'
+
+  // Autoplay/playback rate sync effect
   useEffect(() => {
+    if (isVideo && videoRef.current) {
+      videoRef.current.playbackRate = playbackRate
+      videoRef.current.play()
+        .then(() => setIsPlaying(true))
+        .catch((err) => {
+          console.log("Autoplay blocked:", err)
+          setIsPlaying(false)
+        })
+    }
+  }, [phase, playbackRate, isVideo])
+
+  // Timer for Phase 3: Stretching & Hydration
+  useEffect(() => {
+    if (phase !== 'stretch') return
     const id = window.setInterval(() => {
-      setSecondsLeft((s) => {
+      setStretchSecondsLeft((s) => {
         if (s <= 1) {
           window.clearInterval(id)
           onComplete()
@@ -110,58 +134,263 @@ export function BreakOverlay({ totalSeconds, onSkip, onComplete }: Props) {
       })
     }, 1000)
     return () => window.clearInterval(id)
-  }, [onComplete])
+  }, [phase, onComplete])
 
+  // Stick figure frame animation tick
   useEffect(() => {
     const id = window.setInterval(() => setFrame((f) => f + 1), 50)
     return () => window.clearInterval(id)
   }, [])
 
-  useEffect(() => {
-    // Rotate exercise every ~90 sec (or every total/4 if break is short)
-    const slot = Math.max(60, Math.floor(totalSeconds / EXERCISES.length))
-    const elapsed = totalSeconds - secondsLeft
-    const next = Math.min(EXERCISES.length - 1, Math.floor(elapsed / slot))
-    setExerciseIdx(next)
-  }, [secondsLeft, totalSeconds])
+  // Video controls
+  const togglePlay = () => {
+    if (!videoRef.current) return
+    if (isPlaying) {
+      videoRef.current.pause()
+      setIsPlaying(false)
+    } else {
+      videoRef.current.play().catch(() => {})
+      setIsPlaying(true)
+    }
+  }
 
-  const mins = Math.floor(secondsLeft / 60)
-  const secs = secondsLeft % 60
+  const toggleMute = () => {
+    if (!videoRef.current) return
+    videoRef.current.muted = !isMuted
+    setIsMuted(!isMuted)
+  }
+
+  const handleSpeedChange = (speed: number) => {
+    setPlaybackRate(speed)
+    if (videoRef.current) {
+      videoRef.current.playbackRate = speed
+    }
+  }
+
+  const handleScrub = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const time = parseFloat(e.target.value)
+    setVideoProgress(time)
+    if (videoRef.current) {
+      videoRef.current.currentTime = time
+    }
+  }
+
+  const formatTime = (secs: number) => {
+    const m = Math.floor(secs / 60)
+    const s = Math.floor(secs % 60)
+    return `${m}:${String(s).padStart(2, '0')}`
+  }
+
+  // Calculate remaining real-time
+  let mins = 0
+  let secs = 0
+  if (isVideo) {
+    const currentVideoDur = videoDuration || (phase === 'stretch_video' ? 300 : 307)
+    let remainingSec = Math.max(0, Math.ceil((currentVideoDur - videoProgress) / playbackRate))
+    if (phase === 'stretch_video') {
+      remainingSec += Math.ceil(307 / playbackRate) // Add eye video estimate
+    }
+    remainingSec += 120 // Add final hydration stretch
+    mins = Math.floor(remainingSec / 60)
+    secs = remainingSec % 60
+  } else {
+    mins = Math.floor(stretchSecondsLeft / 60)
+    secs = stretchSecondsLeft % 60
+  }
+
+  // 120 seconds divided by 4 exercises = 30 seconds each
+  const exerciseIdx = Math.min(
+    EXERCISES.length - 1,
+    Math.floor((120 - stretchSecondsLeft) / 30)
+  )
   const exercise = EXERCISES[exerciseIdx]
 
   return (
     <div className="break-overlay">
-      <div className="break-inner">
-        <div className="break-eyebrow">Focus session complete</div>
+      <div className="break-inner" style={{ maxWidth: isVideo ? '640px' : '520px' }}>
+        <div className="break-eyebrow">
+          {phase === 'stretch_video' && 'Phase 1: Full Body Stretch'}
+          {phase === 'eye_video' && 'Phase 2: Eye Exercises'}
+          {phase === 'stretch' && 'Phase 3: Stretch & Hydrate'}
+        </div>
+
+        {/* Phase Progress Indicator */}
+        <div className="break-phases">
+          <div className={`break-phase-step ${phase === 'stretch_video' ? 'active' : ''} ${phase === 'eye_video' || phase === 'stretch' ? 'completed' : ''}`}>
+            <div className="break-phase-dot" />
+            <span>Full Stretch</span>
+          </div>
+          <div className={`break-phase-line ${phase === 'eye_video' || phase === 'stretch' ? 'active completed' : ''}`} />
+          <div className={`break-phase-step ${phase === 'eye_video' ? 'active' : ''} ${phase === 'stretch' ? 'completed' : ''}`}>
+            <div className="break-phase-dot" />
+            <span>Eye Refresh</span>
+          </div>
+          <div className={`break-phase-line ${phase === 'stretch' ? 'active completed' : ''}`} />
+          <div className={`break-phase-step ${phase === 'stretch' ? 'active' : ''}`}>
+            <div className="break-phase-dot" />
+            <span>Hydrate</span>
+          </div>
+        </div>
+
         <h1 className="break-h1">
-          Step away. <em>Breathe.</em>
+          {phase === 'stretch_video' && <>Stretch your <em>body.</em></>}
+          {phase === 'eye_video' && <>Refresh your <em>eyes.</em></>}
+          {phase === 'stretch' && <>Step away. <em>Breathe.</em></>}
         </h1>
+
         <div className="break-clock">
           {String(mins).padStart(2, '0')}:{String(secs).padStart(2, '0')}
         </div>
 
-        <div className="break-card">
-          <div className="break-figure" aria-hidden>
-            <svg viewBox="0 0 200 200" width="180" height="180">
-              {exercise.svg(frame)}
-            </svg>
+        {isVideo ? (
+          <div className="break-video-card">
+            <div className="break-video-wrapper">
+              <video
+                key={phase === 'stretch_video' ? 'stretch' : 'eye'}
+                ref={videoRef}
+                src={phase === 'stretch_video' ? '/stretch_video.mp4' : '/break_video.mp4'}
+                className="break-video-element"
+                autoPlay
+                playsInline
+                onTimeUpdate={() => {
+                  if (videoRef.current) setVideoProgress(videoRef.current.currentTime)
+                }}
+                onLoadedMetadata={() => {
+                  if (videoRef.current) {
+                    setVideoDuration(videoRef.current.duration)
+                    videoRef.current.playbackRate = playbackRate
+                  }
+                }}
+                onEnded={() => setPhase(phase === 'stretch_video' ? 'eye_video' : 'stretch')}
+              />
+            </div>
+            
+            <div className="break-video-controls">
+              {/* Scrubber slider row */}
+              <div className="video-control-row">
+                <div className="video-progress-bar-container">
+                  <input
+                    type="range"
+                    min={0}
+                    max={videoDuration || (phase === 'stretch_video' ? 300 : 307)}
+                    step={0.1}
+                    value={videoProgress}
+                    onChange={handleScrub}
+                    className="video-progress-slider"
+                  />
+                </div>
+                <div className="video-time-display">
+                  {formatTime(videoProgress)} / {formatTime(videoDuration || (phase === 'stretch_video' ? 300 : 307))}
+                </div>
+              </div>
+              
+              {/* Buttons control row */}
+              <div className="video-control-row">
+                <div className="video-control-left">
+                  <button className="video-btn video-btn-primary" onClick={togglePlay}>
+                    {isPlaying ? (
+                      <>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
+                        </svg>
+                        Pause
+                      </>
+                    ) : (
+                      <>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M8 5v14l11-7z"/>
+                        </svg>
+                        Play
+                      </>
+                    )}
+                  </button>
+                  
+                  <button className="video-btn" onClick={toggleMute}>
+                    {isMuted ? (
+                      <>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M11 5L6 9H2v6h4l5 4V5zM23 9l-6 6M17 9l6 6"/>
+                        </svg>
+                        Unmute
+                      </>
+                    ) : (
+                      <>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M11 5L6 9H2v6h4l5 4V5zM19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/>
+                        </svg>
+                        Mute
+                      </>
+                    )}
+                  </button>
+                </div>
+                
+                <div className="video-control-right">
+                  <span style={{ fontSize: 12, color: 'oklch(0.65 0.02 50)', fontFamily: 'var(--sans)' }}>Speed:</span>
+                  {[1.0, 1.25, 1.5, 1.75].map((speed) => (
+                    <button
+                      key={speed}
+                      className={`video-speed-pill ${playbackRate === speed ? 'active' : ''}`}
+                      onClick={() => handleSpeedChange(speed)}
+                    >
+                      {speed === 1.5 ? '1.5x Auto' : `${speed}x`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
-          <div className="break-cue">
-            <div className="break-cue-title">{exercise.title}</div>
-            <div className="break-cue-body">{exercise.cue}</div>
+        ) : (
+          <div className="break-card">
+            <div className="break-figure" aria-hidden>
+              <svg viewBox="0 0 200 200" width="180" height="180">
+                {exercise.svg(frame)}
+              </svg>
+            </div>
+            <div className="break-cue">
+              <div className="break-cue-title">{exercise.title}</div>
+              <div className="break-cue-body">{exercise.cue}</div>
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="break-hydrate">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M12 2v6m0 0c-3 0-7 3-7 8a7 7 0 0014 0c0-5-4-8-7-8z" />
           </svg>
-          <span>Sip water. Your brain is mostly water.</span>
+          <span>
+            {phase === 'stretch_video' && "Loosen tight muscles in your back and hips. Focus on your breathing."}
+            {phase === 'eye_video' && "Follow along with the eye movements to refresh your vision."}
+            {phase === 'stretch' && "Sip water. Your brain is mostly water."}
+          </span>
         </div>
 
-        <button className="break-skip" onClick={onSkip}>
-          Skip break →
-        </button>
+        <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+          {phase === 'stretch_video' && (
+            <>
+              <button className="break-skip" onClick={() => setPhase('eye_video')}>
+                Skip Stretch Video →
+              </button>
+              <button className="break-skip" onClick={onSkip} style={{ opacity: 0.7 }}>
+                Skip Break ✕
+              </button>
+            </>
+          )}
+          {phase === 'eye_video' && (
+            <>
+              <button className="break-skip" onClick={() => setPhase('stretch')}>
+                Skip Eye Exercises →
+              </button>
+              <button className="break-skip" onClick={onSkip} style={{ opacity: 0.7 }}>
+                Skip Break ✕
+              </button>
+            </>
+          )}
+          {phase === 'stretch' && (
+            <button className="break-skip" onClick={onSkip}>
+              Skip Hydration →
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )

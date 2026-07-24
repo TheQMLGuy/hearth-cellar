@@ -48,6 +48,7 @@ const DEFAULT_STORE: PersistedStore = {
   progress: {},
   sliceTargetMin: 30,
   sundayMinutes: 90,
+  weekdayMinutes: 60,
   shortsQuarantine: [],
   remarkable: { paired: false },
   done: { weekStart: new Date().toISOString(), items: [] },
@@ -66,6 +67,17 @@ const DEFAULT_STORE: PersistedStore = {
 
 let migratedFromLocalStorage = false
 let cachedApiKey = ''
+let cachedApiKeys: string[] = []
+let currentApiKeyIdx = 0
+
+function getApiKey(): string | null {
+  if (cachedApiKeys.length > 0) {
+    const key = cachedApiKeys[currentApiKeyIdx]
+    currentApiKeyIdx = (currentApiKeyIdx + 1) % cachedApiKeys.length
+    return key || null
+  }
+  return cachedApiKey || null
+}
 
 async function getStore(): Promise<PersistedStore> {
   // 1. Try the file first
@@ -119,7 +131,7 @@ async function setStore(next: PersistedStore): Promise<boolean> {
 
 async function fetchVideoMeta(videoId: string): Promise<FetchedMeta | null> {
   try {
-    return (await invoke('fetch_youtube_meta', { videoId, apiKey: cachedApiKey || null })) as FetchedMeta | null
+    return (await invoke('fetch_youtube_meta', { videoId, apiKey: getApiKey() })) as FetchedMeta | null
   } catch {
     return null
   }
@@ -135,7 +147,7 @@ async function fetchVideoTranscript(videoId: string): Promise<import('./types').
 
 async function fetchPlaylistMeta(playlistId: string): Promise<FetchedMeta | null> {
   try {
-    return (await invoke('fetch_youtube_playlist_meta', { playlistId, apiKey: cachedApiKey || null })) as FetchedMeta | null
+    return (await invoke('fetch_youtube_playlist_meta', { playlistId, apiKey: getApiKey() })) as FetchedMeta | null
   } catch {
     return null
   }
@@ -143,7 +155,7 @@ async function fetchPlaylistMeta(playlistId: string): Promise<FetchedMeta | null
 
 async function fetchPlaylistVideos(playlistId: string): Promise<PlaylistVideo[]> {
   try {
-    return ((await invoke('fetch_youtube_playlist_videos', { playlistId, apiKey: cachedApiKey || null })) as PlaylistVideo[]) ?? []
+    return ((await invoke('fetch_youtube_playlist_videos', { playlistId, apiKey: getApiKey() })) as PlaylistVideo[]) ?? []
   } catch {
     return []
   }
@@ -151,7 +163,7 @@ async function fetchPlaylistVideos(playlistId: string): Promise<PlaylistVideo[]>
 
 async function resolveChannel(handle: string): Promise<ChannelLookup | null> {
   try {
-    return (await invoke('resolve_channel', { handle, apiKey: cachedApiKey || null })) as ChannelLookup | null
+    return (await invoke('resolve_channel', { handle, apiKey: getApiKey() })) as ChannelLookup | null
   } catch {
     return null
   }
@@ -159,7 +171,7 @@ async function resolveChannel(handle: string): Promise<ChannelLookup | null> {
 
 async function fetchChannelLatest(channelId: string): Promise<ChannelLatest | null> {
   try {
-    return (await invoke('fetch_channel_latest', { channelId, apiKey: cachedApiKey || null })) as ChannelLatest | null
+    return (await invoke('fetch_channel_latest', { channelId, apiKey: getApiKey() })) as ChannelLatest | null
   } catch {
     return null
   }
@@ -167,9 +179,34 @@ async function fetchChannelLatest(channelId: string): Promise<ChannelLatest | nu
 
 async function fetchChannelRecent(channelId: string, sinceIso: string): Promise<ChannelRecentVideo[]> {
   try {
-    return ((await invoke('fetch_channel_recent', { channelId, sinceIso, apiKey: cachedApiKey || null })) as ChannelRecentVideo[]) ?? []
+    return ((await invoke('fetch_channel_recent', { channelId, sinceIso, apiKey: getApiKey() })) as ChannelRecentVideo[]) ?? []
   } catch {
     return []
+  }
+}
+
+async function searchYoutubeVideos(query: string): Promise<import('./types').ChannelRecentVideo[]> {
+  try {
+    return ((await invoke('search_youtube_videos_api', { query, apiKey: getApiKey() })) as import('./types').ChannelRecentVideo[]) ?? []
+  } catch (err) {
+    console.error('searchYoutubeVideos failed:', err)
+    return []
+  }
+}
+
+async function callGeminiApi(apiKey: string, model: string, prompt: string): Promise<string> {
+  try {
+    return (await invoke('call_gemini_api', { apiKey, model, prompt })) as string
+  } catch (err) {
+    throw new Error(String(err))
+  }
+}
+
+async function callOllamaApi(endpoint: string, model: string, prompt: string, formatJson: boolean): Promise<string> {
+  try {
+    return (await invoke('call_ollama_api', { endpoint, model, prompt, formatJson })) as string
+  } catch (err) {
+    throw new Error(String(err))
   }
 }
 
@@ -239,10 +276,10 @@ async function rmStatus(): Promise<import('./types').RmStatus> {
   }
 }
 
-async function rmListDocs(): Promise<import('./types').RmDoc[]> {
+async function rmListDocs(forceRefresh?: boolean): Promise<import('./types').RmDoc[]> {
   // DO NOT swallow errors here — the modal shows the message to the user so
   // we know which endpoint actually rejected.
-  return ((await invoke('rm_list_docs')) as import('./types').RmDoc[]) ?? []
+  return ((await invoke('rm_list_docs', { forceRefresh })) as import('./types').RmDoc[]) ?? []
 }
 
 async function rmDocMeta(uuid: string): Promise<import('./types').RmDoc | null> {
@@ -269,6 +306,12 @@ async function rmDiagnose(): Promise<string> {
   }
 }
 
+async function openInBrowser(url: string): Promise<void> {
+  try {
+    await invoke('open_in_browser', { url })
+  } catch {}
+}
+
 export function installTauriShim(): void {
   const win = getCurrentWindow()
   window.hearth = {
@@ -292,8 +335,15 @@ export function installTauriShim(): void {
     rmDocMeta,
     pickNoteFile,
     rmDiagnose,
+    openInBrowser,
+    searchYoutubeVideos,
+    callGeminiApi,
+    callOllamaApi,
     setApiKey: (key: string) => {
       cachedApiKey = key
+    },
+    setApiKeys: (keys: string[]) => {
+      cachedApiKeys = keys
     },
     windowMinimize: () => {
       win.minimize().catch(() => {})
